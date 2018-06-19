@@ -162,7 +162,8 @@ namespace DigitalPlatform.LibraryServer
         //      2.118 (2017/10/21) library.xml 中 channel 元素增加了 privilegedIpList 属性，可以定义特权前端 IP，这些前端可以创建 maxChannelsLocalhost 属性定义的那么多个并发通道
         //      2.119 (2017/11/13) library.xml 中 circulation 元素增加了 verifyRegisterNoDup 属性，用于定义是否校验册记录登录号的重复情况
         //      2.120 (2017/12/16) WriteRes() API 针对上传文件也支持 gzip 风格了。此前只是对 dp2kernel 资源上传的时候支持 gzip
-        public static string Version = "2.120";
+        //      2.121 (2018/5/15) GetBiblioInfos() API 中改进了获得 table 格式的功能，允许 table: 后面携带风格列表例如 "table:price|title"，另外 UNIMARC 格式内置了 table 格式发生能力，可以删除数据目录下的 cfgs/table_unimarc.fltx 来使用这个内置的发生模块
+        public static string Version = "2.121";
 #if NO
         int m_nRefCount = 0;
         public int AddRef()
@@ -463,6 +464,12 @@ namespace DigitalPlatform.LibraryServer
 
         // 访问日志每天允许创建的最多条目数
         public int AccessLogMaxCountPerDay = 10000;
+
+        // 2018/5/12
+        // 用于出纳操作的辅助性的检索途径
+        // 不要试图在运行中途修改它。它不会回写到 library.xml 中
+        public List<string> ItemAdditionalFroms = new List<string>();
+
 
         // 2013/5/24
         // 用于出纳操作的辅助性的检索途径
@@ -971,6 +978,15 @@ namespace DigitalPlatform.LibraryServer
                             app.WriteErrorLog(strError);
                         this.MaxPatronHistoryItems = v;
 
+                        // 2018/5/12
+                        {
+                            string strList = DomUtil.GetAttr(node, "itemAdditionalFroms");
+                            if (string.IsNullOrEmpty(strList) == false)
+                                this.ItemAdditionalFroms = StringUtil.SplitList(strList);
+                            else
+                                this.ItemAdditionalFroms = new List<string>();
+                        }
+
                         nRet = DomUtil.GetIntegerParam(node,
         "maxItemHistoryItems",
         10, // 100,
@@ -1021,6 +1037,8 @@ namespace DigitalPlatform.LibraryServer
                         this.AcceptBlankRoomName = false;
 
                         this.VerifyRegisterNoDup = true;
+
+                        this.ItemAdditionalFroms = new List<string>();
                     }
 
                     // <channel>
@@ -1406,6 +1424,12 @@ namespace DigitalPlatform.LibraryServer
 
                     ///
                     app.InitialMsmq();
+                    if (string.IsNullOrEmpty(this.OutgoingQueue))
+                    {
+#if LOG_INFO
+                        app.WriteErrorLog("INFO: Message Queue 未被启用");
+#endif
+                    }
 
                     // 初始化 mongodb 相关对象
                     nRet = InitialMongoDatabases(out strError);
@@ -1865,7 +1889,7 @@ namespace DigitalPlatform.LibraryServer
 
                     if (this.MaxClients != 255) // 255 通道情况下不再检查版本失效日期 2016/11/3
                     {
-                        DateTime expire = new DateTime(2018, 5, 15); // 上一个版本是 2018/3/15 2017/1/15 2017/12/1 2017/9/1 2017/6/1 2017/3/1 2016/11/1
+                        DateTime expire = new DateTime(2018, 7, 15); // 上一个版本是 2018/5/15 2018/3/15 2017/1/15 2017/12/1 2017/9/1 2017/6/1 2017/3/1 2016/11/1
                         if (DateTime.Now > expire)
                         {
                             if (this.MaxClients == 255)
@@ -5344,14 +5368,13 @@ namespace DigitalPlatform.LibraryServer
 
             long lHitCount = lRet;
 
-            List<string> aPath = null;
             lRet = channel.DoGetSearchResult(
                 "default",
                 0,
                 1,
                 "zh",
                 null,
-                out aPath,
+                out List<string> aPath,
                 out strError);
             if (lRet == -1)
                 goto ERROR1;
@@ -5386,7 +5409,6 @@ namespace DigitalPlatform.LibraryServer
         //      1   命中1条
         //      >1  命中多于1条
         public int GetRecXml(
-            // RmsChannelCollection channels,
             RmsChannel channel,
             string strQueryXml,
             out string strXml,
@@ -5395,7 +5417,7 @@ namespace DigitalPlatform.LibraryServer
             out byte[] timestamp,
             out string strError)
         {
-            aPath = null;
+            aPath = new List<string>();
 
             strXml = "";
             strError = "";
@@ -5428,7 +5450,6 @@ namespace DigitalPlatform.LibraryServer
 
             long lHitCount = lRet;
 
-            // List<string> aPath = null;
             lRet = channel.DoGetSearchResult(
                 "default",
                 0,
@@ -5504,7 +5525,7 @@ namespace DigitalPlatform.LibraryServer
             out byte[] timestamp,
             out string strError)
         {
-            aPath = null;
+            aPath = new List<string>();
 
             strXml = "";
             strError = "";
@@ -6549,7 +6570,6 @@ out strError);
         //      -1  error
         //      其他    命中记录条数(不超过nMax规定的极限)
         public int SearchReaderRecDup(
-            // RmsChannelCollection channels,
             RmsChannel channel,
             string strBarcode,
             int nMax,
@@ -6557,7 +6577,7 @@ out strError);
             out string strError)
         {
             strError = "";
-            aPath = null;
+            aPath = new List<string>();
 
             Debug.Assert(String.IsNullOrEmpty(strBarcode) == false, "");
 
@@ -6661,7 +6681,7 @@ out strError);
             out string strError)
         {
             strError = "";
-            aPath = null;
+            aPath = new List<string>();
 
             LibraryApplication app = this;
 
@@ -7378,7 +7398,6 @@ out strError);
         //      1   命中1条
         //      >1  命中多于1条
         public int GetItemRecXml(
-            // RmsChannelCollection channels,
             RmsChannel channel,
             string strBarcodeParam,
             string strStyle,
@@ -7595,7 +7614,6 @@ out strError);
         //      1   命中1条
         //      >1  命中多于1条
         public int GetOneItemRec(
-            // RmsChannelCollection channels,
             RmsChannel channel,
             string strDbType,
             string strBarcode,
@@ -7607,7 +7625,7 @@ out strError);
             out byte[] timestamp,
             out string strError)
         {
-            aPath = null;
+            aPath = new List<string>();
 
             strXml = "";
             strError = "";
@@ -7740,7 +7758,6 @@ out strError);
             // 如果命中结果多余一条，则继续获得第一条以后的各条的path
             if (lHitCount > 1)  // TODO: && nMax > 1
             {
-                // List<string> aPath = null;
                 lRet = channel.DoGetSearchResult(
                     "default",
                     0,
@@ -8522,14 +8539,13 @@ out strError);
 
             long lHitCount = lRet;
 
-            List<string> aPath = null;
             lRet = channel.DoGetSearchResult(
                 "default",
                 0,
                 1,
                 "zh",
                 null,
-                out aPath,
+                out List<string> aPath,
                 out strError);
             if (lRet == -1)
                 goto ERROR1;
@@ -8571,7 +8587,7 @@ out strError);
             out string strError)
         {
             strError = "";
-            aPath = null;
+            aPath = new List<string>();
 
             if (strFrom == "册条码号")
                 strFrom = "册条码";    // 兼容最老的 keys 定义。可考虑在适当时候全部修改为 "册条码号"
@@ -8706,7 +8722,7 @@ out strError);
             out string strError)
         {
             strError = "";
-            aPath = null;
+            aPath = new List<string>();
 
             string strInventoryDbName = GetInventoryDbName();
 
@@ -9272,14 +9288,13 @@ out strError);
 
             lHitCount = Math.Min(lHitCount, 100);
 
-            List<string> aPath = null;
             lRet = channel.DoGetSearchResult(
                 "default",
                 0,
                 lHitCount,
                 "zh",
                 null,
-                out aPath,
+                out List<string> aPath,
                 out strError);
             if (lRet == -1)
                 goto ERROR1;
@@ -11510,7 +11525,6 @@ out strError);
             }
             else // 普通条码号
             {
-                List<string> aPath = null;
 
                 // 获得册记录
                 // return:
@@ -11524,7 +11538,7 @@ out strError);
                     strItemBarcode,
                     out strItemXml,
                     100,
-                    out aPath,
+                    out List<string> aPath,
                     out item_timestamp,
                     out strError);
                 if (nRet == 0)
@@ -14948,6 +14962,12 @@ strLibraryCode);    // 读者所在的馆代码
             out string strError)
         {
             strError = "";
+
+            if (string.IsNullOrEmpty(this.OutgoingQueue))
+            {
+                strError = "消息队列尚未被 dp2library 启用";
+                return -1;
+            }
 
             try
             {

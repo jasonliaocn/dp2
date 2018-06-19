@@ -2477,7 +2477,6 @@ out strError);
                 if (this.listView_records.SelectedItems.Count == 0)
                     subMenuItem.Enabled = false;
                 menuItem.MenuItems.Add(subMenuItem);
-
             }
 
             // 标记空下级记录的事项
@@ -2555,6 +2554,9 @@ out strError);
             MessageBox.Show(this, strError);
         }
 
+        // return:
+        //      false   希望中断处理记录
+        //      true    希望继续处理后面记录
         public delegate bool Delegate_processBiblio(string strRecPath,
     XmlDocument dom,
     byte[] timestamp);
@@ -2662,7 +2664,7 @@ out strError);
         int VerifyBiblioRecord(out string strError)
         {
             strError = "";
-            int nRet = 0;
+            // int nRet = 0;
 
             if (this.listView_records.SelectedItems.Count == 0)
             {
@@ -2805,6 +2807,93 @@ out strError);
             }
         }
 
+        // 修改 XML 中的 seller 元素值
+        static string SetSeller(string strXml, string strSeller)
+        {
+            if (string.IsNullOrEmpty(strXml) || string.IsNullOrEmpty(strSeller))
+                return strXml;
+
+            XmlDocument dom = new XmlDocument();
+            dom.LoadXml(strXml);
+
+            DomUtil.SetElementText(dom.DocumentElement, "seller", strSeller);
+            return dom.DocumentElement.OuterXml;
+        }
+
+        // parameters:
+        //      strSellerFilter 书商筛选字符串。形态为 "*"，或者 "书商1,书商2"
+        static string GetFirstSeller(string strSellerFilter)
+        {
+            if (string.IsNullOrEmpty(strSellerFilter))
+                return "";
+            if (strSellerFilter == "*")
+                return "";
+            if (strSellerFilter.IndexOf(",") == -1)
+                return strSellerFilter;
+            return StringUtil.FromListString(strSellerFilter)[0];
+        }
+
+        static string MacroXml(string strXml,
+            string strMARC,
+            string strMarcSyntax)
+        {
+            if (string.IsNullOrEmpty(strXml))
+                return strXml;
+
+            XmlDocument order_dom = new XmlDocument();
+            order_dom.LoadXml(strXml);
+
+            if (order_dom.DocumentElement == null)
+                return strXml;
+
+            XmlNodeList elements = order_dom.DocumentElement.SelectNodes("*");
+            foreach (XmlElement element in elements)
+            {
+                string strValue = element.InnerText.Trim();
+                if (strValue.StartsWith("@"))
+                {
+                    // 兑现宏
+                    string strResult = DoGetMacroValue(strValue, strMARC, strMarcSyntax);
+                    if (strResult != strValue)
+                        element.InnerText = strResult;
+                }
+            }
+
+            return order_dom.DocumentElement.OuterXml;
+        }
+
+        static string DoGetMacroValue(string strMacroName,
+            string strMARC,
+            string strMarcSyntax)
+        {
+            if (string.IsNullOrEmpty(strMarcSyntax) == true)
+                return strMacroName;
+
+            if (string.IsNullOrEmpty(strMARC) == false)
+            {
+                MarcRecord record = new MarcRecord(strMARC);
+
+                string strValue = null;
+                // UNIMARC 情形
+                if (strMarcSyntax == "unimarc")
+                {
+                    if (strMacroName == "@price")
+                        strValue = record.select("field[@name='010']/subfield[@name='d'] | field[@name='011']/subfield[@name='d']").FirstContent;
+                }
+                else if (strMarcSyntax == "usmarc")
+                {
+                    if (strMacroName == "@price")
+                        strValue = record.select("field[@name='020']/subfield[@name='c'] | field[@name='022']/subfield[@name='c']").FirstContent;
+                }
+
+                if (string.IsNullOrEmpty(strValue) == false)
+                    return strValue;
+            }
+
+            return strMacroName;
+        }
+
+
         // 导出订购去向分配表 Excel 文件
         void menu_exportDistributeExcelFile_Click(object sender, EventArgs e)
         {
@@ -2816,18 +2905,33 @@ out strError);
                 goto ERROR1;
             }
 
-            // 询问文件名
-            SaveFileDialog dlg = new SaveFileDialog();
-
-            dlg.Title = "请指定要输出的去向分配表 Excel 文件名";
-            dlg.CreatePrompt = false;
-            dlg.OverwritePrompt = true;
-            dlg.Filter = "Excel 文件 (*.xlsx)|*.xlsx|All files (*.*)|*.*";
-
-            dlg.RestoreDirectory = true;
-
-            if (dlg.ShowDialog() != DialogResult.OK)
+            Order.SaveDistributeExcelFileDialog dlg = new Order.SaveDistributeExcelFileDialog();
+            MainForm.SetControlFont(dlg, this.Font);
+            dlg.LibraryCodeList = Program.MainForm.GetAllLibraryCode();
+            dlg.LibraryCode = Program.MainForm.FocusLibraryCode;
+            dlg.UiState = Program.MainForm.AppInfo.GetString(
+"ItemSearchForm",
+"SaveDistributeExcelFileDialog_uiState",
+"");
+            Program.MainForm.AppInfo.LinkFormState(dlg, "bibliosearchform_SaveDistributeExcelFileDialog");
+            dlg.ShowDialog(this);
+            Program.MainForm.AppInfo.UnlinkFormState(dlg);
+            Program.MainForm.AppInfo.SetString(
+"ItemSearchForm",
+"SaveDistributeExcelFileDialog_uiState",
+dlg.UiState);
+            if (dlg.DialogResult != System.Windows.Forms.DialogResult.OK)
                 return;
+
+            int nRet = GetLocationList(
+out List<string> location_list,
+out strError);
+            if (nRet == -1)
+            {
+                strError = "获得馆藏地配置参数时出错: " + strError;
+                goto ERROR1;
+            }
+            location_list = Order.DistributeExcelFile.FilterLocationList(location_list, dlg.LibraryCode);
 
             bool bLaunchExcel = true;
 
@@ -2835,41 +2939,253 @@ out strError);
             try
             {
                 doc = new XLWorkbook(XLEventTracking.Disabled);
-                File.Delete(dlg.FileName);
+                File.Delete(dlg.OutputFileName);
             }
             catch (Exception ex)
             {
-                strError = "BiblioSearchForm new XLWorkbook() {94E68114-353E-49E5-987E-7E8545A6D4E3} exception: " + ExceptionUtil.GetAutoText(ex);
-                return;
+                strError = "BiblioSearchForm new XLWorkbook() exception: " + ExceptionUtil.GetAutoText(ex);
+                goto ERROR1;
             }
 
-            IXLWorksheet sheet = null;
-            sheet = doc.Worksheets.Add("表格");
+            IXLWorksheet sheet = doc.Worksheets.Add("订购去向分配表");
+            // sheet.Protect().SetInsertRows().SetFormatColumns().SetFormatRows().SetFormatCells().SetScenarios();
 
-            // 每个列的最大字符数
-            List<int> column_max_chars = new List<int>();
-            int nBiblioIndex = 0;
-            int nRowIndex = 2;
+            List<int> column_max_chars = new List<int>();   // 每个列的最大字符数            
+            int nLineNumber = 0;    // 序号            
+            // int nRowIndex = 2;  // 跟踪行号            
+            bool bDone = false; // 是否成功走完全部流程
+
+            int nBiblioCount = 0;   // 导出书目计数
+            int nOrderCount = 0;    // 导出订购记录计数
+            int nNewOrderCount = 0; // 导出新订购记录计数(已包含在 nOrderCount 数值内)
+            int nWriteNewOrderCount = 0;    // 导出前立即写入订购库的新订购记录数
+
+            Program.MainForm.OperHistory.AppendHtml("<div class='debug begin'>" + HttpUtility.HtmlEncode(DateTime.Now.ToLongTimeString())
++ " 开始导出订购去向 Excel 文件</div>");
             try
             {
+                // 准备书目列标题
+                Order.BiblioColumnOption biblio_column_option = new Order.BiblioColumnOption(Program.MainForm.UserDir,
+                    "");
+                biblio_column_option.LoadData(Program.MainForm.AppInfo,
+                typeof(Order.BiblioColumnOption).ToString());
 
-                int nRet = ProcessBiblio(
-                        (strRecPath, dom, timestamp) =>
+                List<Order.ColumnProperty> biblio_title_list = Order.DistributeExcelFile.BuildList(biblio_column_option);
+
+                // 准备订购列标题
+                Order.OrderColumnOption order_column_option = new Order.OrderColumnOption(Program.MainForm.UserDir,
+    "");
+                order_column_option.LoadData(Program.MainForm.AppInfo,
+                typeof(Order.OrderColumnOption).ToString());
+
+                List<Order.ColumnProperty> order_title_list = Order.DistributeExcelFile.BuildList(order_column_option);
+                // 附加某些列的值列表
+                {
+                    LibraryChannel channel = this.GetChannel();
+                    try
+                    {
+                        if (Order.ColumnProperty.FillValueList(channel,
+                            dlg.LibraryCode,
+                            order_title_list,
+                            out strError) == -1)
+                            goto ERROR1;
+                    }
+                    finally
+                    {
+                        this.ReturnChannel(channel);
+                    }
+                }
+
+                Order.ExportDistributeContext context = new Order.ExportDistributeContext
+                {
+                    Sheet = sheet,
+                    LocationList = location_list,
+                    BiblioColList = biblio_title_list,
+                    OrderColList = order_title_list,
+                    ColumnMaxChars = column_max_chars,
+                    RowIndex = 2,
+                    OnlyOutputBlankStateOrderRecord = dlg.OnlyOutputBlankStateOrderRecord,
+                };
+
+                // 输出标题行
+                Order.DistributeExcelFile.OutputDistributeInfoTitleLine(
+                    context,
+""
+);
+
+                /*
+* content_form_area
+* title_area
+* edition_area
+* material_specific_area
+* publication_area
+* material_description_area
+* series_area
+* notes_area
+* resource_identifier_area
+* * */
+
+                string strSellerFilter = dlg.SellerFilter;  // "*";
+                string strDefaultOrderXml = "";
+
+                nRet = ProcessBiblio(
+                        (strBiblioRecPath, biblio_dom, biblio_timestamp) =>
                         {
-                            this.ShowMessage("正在处理书目记录 " + strRecPath);
+                            this.ShowMessage("正在处理书目记录 " + strBiblioRecPath);
 
-                            OutputBiblioInfo(sheet,
-                                dom,
-                                strRecPath,
-                                nBiblioIndex++,
+                            Order.DistributeExcelFile.WarningRecPath("===", null);
+                            Order.DistributeExcelFile.WarningRecPath("书目记录 " + strBiblioRecPath, null);
+
+                            nOrderCount += Order.DistributeExcelFile.OutputDistributeInfos(
+                                context,
+                                this,
+                                strSellerFilter,
+                                dlg.LibraryCode,
+                                //sheet,
+                                strBiblioRecPath,
+                                ref nLineNumber,
                                 "",
-                                ref nRowIndex);
-                            nRowIndex++;    // 空行
+                                (biblio_recpath, order_recpath) =>
+                                {
+                                    if (string.IsNullOrEmpty(strDefaultOrderXml))
+                                    {
+                                        REDO:
+                                        // 看看即将插入的位置是图书还是期刊?
+                                        string strPubType = OrderEditForm.GetPublicationType(biblio_recpath);
+
+                                        OrderEditForm edit = new OrderEditForm();
+
+                                        OrderEditForm.SetXml(edit.OrderEditControl,
+                                            SetSeller(Program.MainForm.AppInfo.GetString("BiblioSearchForm", "orderRecord", "<root />"), GetFirstSeller(strSellerFilter)),
+                                            strPubType);
+                                        edit.Text = "新增订购事项";
+                                        edit.DisplayMode = strPubType == "series" ? "simpleseries" : "simplebook";
+
+                                        Program.MainForm.AppInfo.LinkFormState(edit, "BiblioSearchForm_OrderEditForm_state");
+                                        edit.ShowDialog(this);
+
+                                        strDefaultOrderXml = OrderEditForm.GetXml(edit.OrderEditControl);
+                                        // 删除那些空内容的元素
+                                        strDefaultOrderXml = DomUtil.RemoveEmptyElements(strDefaultOrderXml);
+
+                                        Program.MainForm.AppInfo.SetString("BiblioSearchForm", "orderRecord", strDefaultOrderXml);
+
+                                        if (edit.DialogResult == System.Windows.Forms.DialogResult.Cancel)
+                                        {
+                                            strDefaultOrderXml = "<root />";
+                                            throw new InterruptException("用户中断");
+                                        }
+
+                                        XmlDocument order_dom = new XmlDocument();
+                                        order_dom.LoadXml(strDefaultOrderXml);
+
+                                        string strDistribute = DomUtil.GetElementInnerText(order_dom.DocumentElement, "distribute");
+
+                                        // 观察一个馆藏分配字符串，看看是否在指定用户权限的管辖范围内
+                                        // return:
+                                        //      -1  出错
+                                        //      0   超过管辖范围。strError中有解释
+                                        //      1   在管辖范围内
+                                        nRet = dp2StringUtil.DistributeInControlled(strDistribute,
+                                            dlg.LibraryCode,
+                                            out strError);
+                                        if (nRet == -1)
+                                            throw new Exception(strError);
+                                        if (nRet == 0)
+                                        {
+                                            strError = "馆藏去向 '" + strDistribute + "' 越过当前用户的关注范围(馆代码) '" + dlg.LibraryCode + "'。请重新指定馆藏去向";
+                                            MessageBox.Show(this, strError);
+                                            goto REDO;
+                                        }
+
+                                        // TODO: 验证一下书商名称是否在合法值范围内?
+                                    }
+
+                                    // 兑现模板记录中的宏
+                                    string strResultXml = strDefaultOrderXml;
+                                    if (strDefaultOrderXml.IndexOf("@") != -1)
+                                    {
+                                        // 将XML格式转换为MARC格式
+                                        // 自动从数据记录中获得MARC语法
+                                        nRet = MarcUtil.Xml2Marc(biblio_dom.OuterXml,
+                                            true,
+                                            null,
+                                            out string strMarcSyntax,
+                                            out string strMARC,
+                                            out strError);
+                                        if (nRet == -1)
+                                        {
+                                            strError = "XML转换到MARC记录时出错: " + strError;
+                                            throw new Exception(strError);
+                                        }
+
+                                        // 兑现模板 XML 中的宏
+                                        strResultXml = MacroXml(strDefaultOrderXml,
+        strMARC,
+        strMarcSyntax);
+                                    }
+
+                                    EntityInfo order = new EntityInfo
+                                    {
+                                        OldRecord = strResultXml
+                                    };
+
+                                    // 实际写入订购记录
+                                    if (dlg.CreateNewOrderRecord)
+                                    {
+                                        LibraryChannel channel = this.GetChannel();
+                                        try
+                                        {
+                                            nRet = MainForm.SaveItemRecord(channel,
+        biblio_recpath,
+    "order",
+    "", // strOrderRecPath,
+    "",
+    order.OldRecord,
+    "",
+    null,   // timestamp,
+    out string strOutputOrderRecPath,
+    out byte[] baNewTimestamp,
+    out strError);
+                                            if (nRet == -1)
+                                                throw new Exception(strError);
+                                            order.OldTimestamp = baNewTimestamp;
+                                            order.OldRecPath = strOutputOrderRecPath;
+                                        }
+                                        finally
+                                        {
+                                            this.ReturnChannel(channel);
+                                        }
+                                        nWriteNewOrderCount++;
+                                    }
+
+                                    Order.DistributeExcelFile.WarningGreen("因书目记录 '" + strBiblioRecPath + "' 没有符合条件的订购记录，所以导出一条新的订购记录，如下：");
+                                    Order.DistributeExcelFile.WarningRecPath(order.OldRecPath, DomUtil.GetIndentXml(DomUtil.RemoveEmptyElements(order.OldRecord)));
+
+                                    nNewOrderCount++;
+                                    return order;
+                                }
+                                );
+
+                            nBiblioCount++;
                             return true;
                         },
                 out strError);
                 if (nRet == -1)
                     goto ERROR1;
+
+                context.ContentEndRow = context.RowIndex - 1;
+
+                Order.DistributeExcelFile.OutputSumLine(context);
+
+                Order.DistributeExcelFile.AdjectColumnWidth(sheet, column_max_chars, 20);
+
+                bDone = true;
+            }
+            catch (InterruptException ex)
+            {
+                strError = "导出去向分配表 Excel 时" + ex.Message;
+                goto ERROR1;
             }
             catch (Exception ex)
             {
@@ -2883,63 +3199,39 @@ out strError);
 
                 this.ClearMessage();
 
-                if (doc != null)
+                if (bDone == true)
                 {
-                    doc.SaveAs(dlg.FileName);
-                    doc.Dispose();
+                    if (doc != null)
+                    {
+                        doc.SaveAs(dlg.OutputFileName);
+                        doc.Dispose();
+                    }
+
+                    if (bLaunchExcel)
+                    {
+                        try
+                        {
+                            System.Diagnostics.Process.Start(dlg.OutputFileName);
+                        }
+                        catch
+                        {
+
+                        }
+                    }
                 }
 
-                if (bLaunchExcel)
-                {
-                    try
-                    {
-                        System.Diagnostics.Process.Start(dlg.FileName);
-                    }
-                    catch
-                    {
-
-                    }
-                }
+                Program.MainForm.OperHistory.AppendHtml("<div class='debug begin'>" + HttpUtility.HtmlEncode(DateTime.Now.ToLongTimeString())
++ " 结束导出订购去向 Excel 文件</div>");
             }
 
+            // 提示完成和统计信息
+            MessageDialog.Show(this,
+                string.Format("导出完成。\r\n\r\n共处理书目记录 {0} 条, 导出订购记录 {1} 条。\r\n所导出的订购记录中，{2} 条是新订购记录， 其中 {3} 条已经写入订购库",
+                nBiblioCount, nOrderCount, nNewOrderCount, nWriteNewOrderCount));
             return;
             ERROR1:
             MessageBox.Show(this, strError);
         }
-
-        void OutputDistributeInfo(IXLWorksheet sheet,
-    XmlDocument dom,
-    string strRecPath,
-    int nBiblioIndex,
-    string strStyle,
-    ref int nRowIndex
-    )
-        {
-            string strError = "";
-
-            string strTableXml = "";
-            // return:
-            //      -1  出错
-            //      0   没有找到
-            //      1   找到
-            int nRet = GetTable(
-                strRecPath,
-                out strTableXml,
-                out strError);
-            if (nRet == -1)
-                throw new Exception(strError);
-
-            /*
-            ExcelUtility.OutputBiblioTable(
-            strRecPath,
-            strTableXml,
-            nBiblioIndex,
-            sheet,
-            2,  // nColIndex,
-            ref nRowIndex);
-            */
-        }
-
 
         // 2017/3/17
         // 导出详情到 Excel 文件
@@ -3044,49 +3336,6 @@ out strError);
             MessageBox.Show(this, strError);
         }
 
-        // return:
-        //      -1  出错
-        //      0   没有找到
-        //      1   找到
-        int GetTable(
-            string strRecPath,
-            out string strXml,
-            out string strError)
-        {
-            strError = "";
-            strXml = "";
-
-            LibraryChannel channel = this.GetChannel();
-            try
-            {
-                string[] results = null;
-                byte[] baNewTimestamp = null;
-                long lRet = channel.GetBiblioInfos(
-                    stop,
-                    strRecPath,
-                    "",
-                    new string[] { "table" },   // formats
-                    out results,
-                    out baNewTimestamp,
-                    out strError);
-                if (lRet == 0)
-                    return 0;
-                if (lRet == -1)
-                    return -1;
-                if (results == null || results.Length == 0)
-                {
-                    strError = "results error";
-                    return -1;
-                }
-                strXml = results[0];
-                return 1;
-            }
-            finally
-            {
-                this.ReturnChannel(channel);
-            }
-        }
-
         void OutputBiblioInfo(IXLWorksheet sheet,
             XmlDocument dom,
             string strRecPath,
@@ -3105,6 +3354,7 @@ out strError);
             //      1   找到
             int nRet = GetTable(
                 strRecPath,
+                "",
                 out strTableXml,
                 out strError);
             if (nRet == -1)
@@ -9165,6 +9415,8 @@ MessageBoxDefaultButton.Button1);
         // 调节各个事项之间的并存冲突
         private void checkedComboBox_biblioDbNames_ItemChecked(object sender, ItemCheckedEventArgs e)
         {
+            CheckedComboBox.ProcessItemChecked(e, "<全部>,<all>".ToLower());
+#if NO
             ListView list = e.Item.ListView;
 
             if (e.Item.Text == "<全部>" || e.Item.Text.ToLower() == "<all>")
@@ -9198,6 +9450,7 @@ MessageBoxDefaultButton.Button1);
                     }
                 }
             }
+#endif
         }
 
         // 清除残余图像
