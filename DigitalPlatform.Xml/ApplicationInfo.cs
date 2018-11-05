@@ -67,8 +67,7 @@ namespace DigitalPlatform.Xml
         {
             if (FileName != "")
             {
-                string strErrorInfo;
-                Save(out strErrorInfo);
+                Save(out string strErrorInfo);
             }
         }
 
@@ -140,11 +139,18 @@ namespace DigitalPlatform.Xml
         {
             strErrorInfo = "";
 
-            if (FileName == "")
+            if (string.IsNullOrEmpty(FileName) == true)
             {
                 strErrorInfo = "FileName为空...";
                 return -1;
             }
+
+            // 2018/6/25
+            // 先把以前的文件改名作为备份保存
+            string strTempFileName = FileName + ".save";
+            FileInfo fi = new FileInfo(FileName);
+            if (File.Exists(FileName) && fi.Length != 0)
+                File.Copy(FileName, strTempFileName, true);
 
             dom.Save(FileName);
             return 0;
@@ -538,11 +544,16 @@ null);
             string strCfgTitle,
             SizeStyle style)
         {
+            // 默认值可以按照屏幕分辨率估算
+            int nDefaultWidth = (int)(((double)Screen.PrimaryScreen.WorkingArea.Width) * 0.5);
+            int nDefaultHeight = (int)(((double)Screen.PrimaryScreen.WorkingArea.Height) * 0.7);
+
             LoadMdiChildFormStates(form,
                 strCfgTitle,
                 style,
-                600,
-                400);
+                nDefaultWidth,  // 600,
+                nDefaultHeight  // 400
+                );
         }
 
         // http://blogs.msdn.com/b/rprabhu/archive/2005/11/28/497792.aspx
@@ -774,7 +785,6 @@ null);
             this.Save();
             this.UnlinkFormState((Form)sender);
         }
-
     }
 
     [Flags]

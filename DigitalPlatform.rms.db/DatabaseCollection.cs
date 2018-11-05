@@ -21,7 +21,8 @@ using MySql.Data.MySqlClient;
 using Oracle.ManagedDataAccess.Client;
 using Oracle.ManagedDataAccess.Types;
 
-using DigitalPlatform;
+using Ghostscript.NET;
+
 using DigitalPlatform.ResultSet;
 using DigitalPlatform.IO;
 using DigitalPlatform.Text;
@@ -101,6 +102,27 @@ namespace DigitalPlatform.rms
             }
         }
 
+#if NO
+        internal CancellationTokenSource _app_down
+        {
+            get
+            {
+                return this.KernelApplication?._app_down;
+            }
+        }
+
+        internal bool IsDowning
+        {
+            get
+            {
+                CancellationTokenSource source = this._app_down;
+                if (source != null)
+                    return source.IsCancellationRequested;
+                return false;
+            }
+        }
+#endif
+
         public bool Changed = false;	//内容是否发生改变
 
         // public XmlNode NodeDbs = null;  //<dbs>节点
@@ -151,6 +173,8 @@ namespace DigitalPlatform.rms
             }
         }
 
+        public static GhostscriptVersionInfo gvi = null;
+
         // parameter:
         //		strDataDir	data目录
         //		strError	out参数，返回出错信息
@@ -177,6 +201,10 @@ namespace DigitalPlatform.rms
                 return -1;
             }
             this.BinDir = strBinDir;
+
+            string path = Path.Combine(this.BinDir, "gsdll32.dll");
+            gvi = new GhostscriptVersionInfo(path);
+
 
             if (String.IsNullOrEmpty(this.DataDir) == true)
             {
@@ -419,6 +447,7 @@ namespace DigitalPlatform.rms
         }
 #endif
 
+        // 将 Connection 的 Transaction Commit
         public void Commit()
         {
             // 2012/2/21
@@ -471,7 +500,8 @@ namespace DigitalPlatform.rms
                  strTime + " " + strText + "\r\n");
         }
 
-        public void ClearStreamCache()
+        // 清除 StreamCache (流缓存，这是为了加快普通文件访问速度而设计的一套机制)
+        public void ClearStreamCache(CancellationToken token)
         {
             //**********对库集合加读锁****************
             m_container_lock.AcquireReaderLock(m_nContainerLockTimeOut);
@@ -480,12 +510,30 @@ namespace DigitalPlatform.rms
 #endif
             try
             {
-                foreach(Database db in this)
+                foreach (Database db in this)
                 {
+                    token.ThrowIfCancellationRequested();
+
                     if (db is SqlDatabase)
                     {
                         SqlDatabase sql_db = (SqlDatabase)db;
                         sql_db._streamCache.ClearIdle(TimeSpan.FromSeconds(60));
+
+                        sql_db._pageCache.Clean(
+                            true,
+                            TimeSpan.FromMinutes(2),
+                            (filename) =>
+                            {
+                                try
+                                {
+                                    sql_db._streamCache.FileDelete(filename);
+                                }
+                                catch (Exception ex)
+                                {
+                                    this.KernelApplication.WriteErrorLog("删除 streamCache 文件 " + filename + " 出现异常: " + ExceptionUtil.GetAutoText(ex));
+                                }
+                            },
+                            token);
                     }
                 }
             }
@@ -505,7 +553,8 @@ namespace DigitalPlatform.rms
         //      0   成功
         // 线：安全
         // 异常：可能会抛出异常
-        public int CheckDbsTailNo(out string strError)
+        public int CheckDbsTailNo(CancellationToken token,
+            out string strError)
         {
             strError = "";
 
@@ -519,21 +568,21 @@ namespace DigitalPlatform.rms
 #endif
             try
             {
-                this.KernelApplication.WriteErrorLog("开始校验数据库尾号。");
+                // this.KernelApplication.WriteErrorLog("开始校验数据库尾号。");
 
                 int nRet = 0;
                 try
                 {
                     int nFailCount = 0;
-                    for (int i = 0; i < this.Count; i++)
+                    foreach (Database db in this)
                     {
-                        Database db = (Database)this[i];
-                        string strTempError = "";
+                        token.ThrowIfCancellationRequested();
+
                         // return:
                         //      -2  连接错误
                         //      -1  出错
                         //      0   成功
-                        nRet = db.CheckTailNo(out strTempError);
+                        nRet = db.CheckTailNo(token, out string strTempError);
                         if (nRet < 0)
                         {
                             nFailCount++;
@@ -602,8 +651,7 @@ namespace DigitalPlatform.rms
                 }
 
                 this.Changed = false;
-
-                this.KernelApplication.WriteErrorLog("完成保存内存dom到 '" + this.m_strDbsCfgFilePath + "' 文件。");
+                this.KernelApplication.WriteErrorLog("完成保存内存 DOM 到 '" + this.m_strDbsCfgFilePath + "' 文件。");
             }
             finally
             {
@@ -2002,6 +2050,8 @@ namespace DigitalPlatform.rms
         {
             strError = "";
 
+            DateTime start = DateTime.Now;
+
             this.Commit();
 
             //对库集合加读锁*********************************
@@ -2054,8 +2104,25 @@ namespace DigitalPlatform.rms
                 if (resultSet != null)
                     resultSet.m_strQuery = strQuery;
 
+                // testing
+                // Thread.Sleep(6000);
+
+                // 记载慢速的检索
+                TimeSpan length = DateTime.Now - start;
+                if (length >= slow_length)
+                {
+                    long count = resultSet == null ? 0 : resultSet.Count;
+                    KernelApplication.WriteErrorLog(string.Format("检索式 '{0}' 耗时 {1} (检索是否成功 {2} 命中条数 {3})，超过慢速阈值 {4}",
+                        strQuery,
+                        length.ToString(),
+                        nRet,
+                        count,
+                        slow_length.ToString()));
+                }
+
                 if (nRet <= -1)
                     return nRet;
+                return 0;
             }
             finally
             {
@@ -2065,8 +2132,10 @@ namespace DigitalPlatform.rms
 				this.WriteDebugInfo("Search()，对库集合解读锁。");
 #endif
             }
-            return 0;
         }
+
+        // 慢速检索阈值
+        static TimeSpan slow_length = TimeSpan.FromSeconds(5);
 
         #region CopyRecord() 下级函数
 
@@ -2499,7 +2568,7 @@ namespace DigitalPlatform.rms
                 Debug.Assert(existing_dom != null, "");
 
                 Debug.Assert(StringUtil.IsInList("reserve_target", strMergeStyle) == true, "");
-                
+
                 target_dom = new XmlDocument();
                 target_dom.LoadXml(existing_dom.OuterXml);  // target_dom 依然是目标位置的记录内容，意思就是目标位置元数据记录不会被源参数所提供的内容覆盖
 
@@ -3561,16 +3630,13 @@ namespace DigitalPlatform.rms
                         bObject = false;
                     }
 
+                    //------------------------------------------------
+                    //开始处理资源
+                    //---------------------------------------------------
 
-                //------------------------------------------------
-                //开始处理资源
-                //---------------------------------------------------
-
-                DOWRITE:
+                    DOWRITE:
 
                     // ****************************************
-
-
                     string strOutputRecordID = "";
                     nRet = db.CanonicalizeRecordID(strRecordID,
                         out strOutputRecordID,
@@ -3613,7 +3679,6 @@ namespace DigitalPlatform.rms
                             out strError);
 
                         strOutputResPath = strDbName + "/" + strRecordID + "/object/" + strObjectID;
-
                     }
                     else  // 记录体
                     {
@@ -4023,7 +4088,7 @@ namespace DigitalPlatform.rms
                 return -1;
 
 
-        DOWRITE:
+            DOWRITE:
 
             string strFilePath = "";//GetCfgItemLacalPath(strCfgItemPath);
             // return:
@@ -4059,7 +4124,7 @@ namespace DigitalPlatform.rms
                      strRanges,
                      lTotalLength,
                      baSource,
-                    // streamSource,
+                     // streamSource,
                      strMetadata,
                      strStyle,
                      baInputTimestamp,
@@ -4438,7 +4503,7 @@ namespace DigitalPlatform.rms
                 baOutputTimestamp = DatabaseUtil.CreateTimestampForCfg(strNewFilePath);
             }
 
-        END1:
+            END1:
 
             // 写metadata
             if (strMetadata != "")
@@ -4600,6 +4665,21 @@ namespace DigitalPlatform.rms
                 // bObject = false;
             }
 
+            if (strObjectID.IndexOf("/") != -1)
+            {
+                // 有可能 strObjectID 是 0/page:1 这样的形态
+                strObjectID = StringUtil.GetFirstPartPath(ref strPath);
+
+                strXPath = StringUtil.GetFirstPartPath(ref strPath);
+#if NO
+                if (strXPath.StartsWith("page:") == false)
+                {
+                    strError = "资源路径 '" + strResPath + "' 不合法,第 5 级必须是 'page:xxx' 形态";
+                    return -7;
+                }
+#endif
+            }
+
             info.DbName = strDbName;
             info.RecordID = strRecordID;
             info.XPath = strXPath;
@@ -4753,7 +4833,7 @@ namespace DigitalPlatform.rms
     nMaxLength,
     strStyle,
     out baData,
-                        // out strMetadata,
+    // out strMetadata,
     out baOutputTimestamp,
     out strError);
                     if (StringUtil.IsInList("outputpath", strStyle) == true)
@@ -4911,6 +4991,7 @@ namespace DigitalPlatform.rms
                     //		>=0 资源总长度
                     lRet = info.Database.GetObject(info.RecordID,
                         info.ObjectID,
+                        info.XPath,
                         lStart,
                         nLength,
                         nMaxLength,
@@ -4922,6 +5003,7 @@ namespace DigitalPlatform.rms
 
                     if (StringUtil.IsInList("outputpath", strStyle) == true)
                     {
+                        // TODO: 当获得 PDF 单页图像的时候，这里返回的路径应该比 object 要深一层
                         strOutputResPath = info.DbName + "/" + info.RecordID + "/object/" + info.ObjectID;
                     }
                 }
@@ -5386,11 +5468,10 @@ namespace DigitalPlatform.rms
                     string strDbName = info.DbName;
 
                     // 检查当前帐户是否有删除记录
-                    string strExistRights = "";
                     bool bHasRight = user.HasRights(strResPath,//db.GetCaption("zh-CN"),
                         ResType.Record,
                         "delete",
-                        out strExistRights);
+                        out string strExistRights);
                     if (bHasRight == false)
                     {
                         strError = "您的帐户名为'" + user.Name + "'，对'" + strDbName + "'数据库没有'删除记录(delete)'权限，目前的权限值为'" + strExistRights + "'。";
@@ -5426,7 +5507,7 @@ namespace DigitalPlatform.rms
 #endif
             }
 
-        CHECK_CHANGED:
+            CHECK_CHANGED:
             //及时保存database.xml // 是用加锁的函数吗？
             if (this.Changed == true)
                 this.SaveXmlSafety(true);
@@ -5850,7 +5931,7 @@ namespace DigitalPlatform.rms
 #endif
             }
 
-        END1:
+            END1:
             // 列出实际需要的项
             nTotalLength = aItem.Count;
             long lOutputLength;
@@ -6038,7 +6119,7 @@ namespace DigitalPlatform.rms
 
                     count++;
 
-                CONTINUE:
+                    CONTINUE:
                     i++;
                 }
 
@@ -6512,7 +6593,8 @@ ChannelIdleEventArgs e);
 
     public class ChannelHandle
     {
-        //public DatabaseCollection Dbs = null;
+        public CancellationTokenSource CancelTokenSource { get; set; }
+
         public KernelApplication App = null;
 
         bool m_bStop = false;
@@ -6520,9 +6602,16 @@ ChannelIdleEventArgs e);
         public event ChannelIdleEventHandler Idle = null;
         public event EventHandler Stop = null;
 
+        public ChannelHandle(KernelApplication app)
+        {
+            this.App = app;
+            this.CancelTokenSource = CancellationTokenSource.CreateLinkedTokenSource(app._app_down.Token);
+        }
+
         public void Clear()
         {
             this.m_bStop = false;
+            this.CancelTokenSource = CancellationTokenSource.CreateLinkedTokenSource(this.App._app_down.Token);
         }
 
         // return:
@@ -6530,6 +6619,15 @@ ChannelIdleEventArgs e);
         //      true    希望继续
         public bool DoIdle()
         {
+            // 2018/10/7
+#if NO
+            bool? is_cancel = this.App?._app_down?.IsCancellationRequested;
+            if (is_cancel != null && is_cancel == true)
+                return false;
+#endif
+            if (this.CancelTokenSource != null && this.CancelTokenSource.IsCancellationRequested)
+                return false;
+
             if (this.m_bStop == true)
                 return false;
 
@@ -6543,8 +6641,11 @@ ChannelIdleEventArgs e);
             {
                 this.App.MyWriteDebugInfo("abort");
 
-                this.m_bStop = true;    // 2011/1/19 
+                if (this.CancelTokenSource!= null
+                    && this.CancelTokenSource.IsCancellationRequested == false)
+                    this.CancelTokenSource.Cancel();
 
+                this.m_bStop = true;    // 2011/1/19 
                 return false;
             }
             return true;
@@ -6552,6 +6653,10 @@ ChannelIdleEventArgs e);
 
         public void DoStop()
         {
+            if (this.CancelTokenSource!= null
+                && this.CancelTokenSource.IsCancellationRequested == false)
+                this.CancelTokenSource.Cancel();
+
             this.m_bStop = true;
 
             if (this.Stop != null)
@@ -6564,6 +6669,10 @@ ChannelIdleEventArgs e);
         {
             get
             {
+                if (this.CancelTokenSource != null
+                    && this.CancelTokenSource.IsCancellationRequested == true)
+                    return true;
+
                 return this.m_bStop;
             }
         }
@@ -6591,7 +6700,7 @@ ChannelIdleEventArgs e);
     }
 
     #region 专门用于检索的类
-
+#if NO
     public class DatabaseCommandTask : IDisposable
     {
         public object m_command = null;
@@ -6789,7 +6898,7 @@ dp2LibraryXE 版本: dp2LibraryXE, Version=1.1.5939.41661, Culture=neutral, Publ
                 ((OracleDataReader)this.DataReader).Close();
         }
     }
-
+#endif
     #endregion
 
     // 资源项信息

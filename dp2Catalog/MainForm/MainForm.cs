@@ -139,6 +139,8 @@ namespace dp2Catalog
                 DataDir = Environment.CurrentDirectory;
             }
 
+            bool bDp2catalogXmlExist = false;
+
             {
                 // 2015/5/8
                 this.UserDir = Path.Combine(
@@ -153,16 +155,20 @@ namespace dp2Catalog
                 this.UserLogDir = Path.Combine(this.UserDir, "log");
                 PathUtil.TryCreateDir(this.UserLogDir);
 
-                // 将 dp2catalog.xml 文件中绿色安装目录或者 ClickOnce 安装的数据目录移动到用户目录
-                nRet = MoveDp2catalogXml(out strError);
+                // 将 dp2catalog.xml 文件从绿色安装目录或者 ClickOnce 安装的数据目录移动到用户目录
+                nRet = MoveDataFile("dp2catalog.xml", out strError);
                 if (nRet == -1)
                 {
                     this.ReportError("dp2catalog 移动 dp2catalog.xml 时出现错误", "(安静报错)" + strError);
                     MessageBox.Show(this, strError);
                 }
 
-                this.AppInfo = new ApplicationInfo(Path.Combine(this.UserDir, "dp2catalog.xml"));
+                string strDp2catalogXmlFileName = Path.Combine(this.UserDir, "dp2catalog.xml");
+                bDp2catalogXmlExist = File.Exists(strDp2catalogXmlFileName);
 
+                this.AppInfo = new ApplicationInfo(strDp2catalogXmlFileName);
+
+#if NO
                 string strOldFileName = Path.Combine(this.DataDir, "zserver.xml");
                 string strNewFileName = Path.Combine(this.UserDir, "zserver.xml");
                 if (File.Exists(strNewFileName) == false)
@@ -188,7 +194,8 @@ namespace dp2Catalog
                         MessageBox.Show(this, "复制 zserver.xml 文件时出错: " + ex.Message);
                     }
                 }
-
+#endif
+                MoveZServerXml();
             }
 
             // 设置窗口尺寸状态
@@ -225,15 +232,17 @@ namespace dp2Catalog
             this.SetMenuItemState();
 
             // cfgcache
-            nRet = cfgCache.Load(Path.Combine(this.DataDir, "cfgcache.xml"),
+            Debug.Assert(string.IsNullOrEmpty(this.UserDir) == false, "");
+            // 2018/6/25 改在 UserDir 下
+            nRet = cfgCache.Load(Path.Combine(this.UserDir, "cfgcache.xml"),    // this.DataDir
                 out strError);
             if (nRet == -1)
             {
                 if (IsFirstRun == false)
-                    MessageBox.Show(strError);
+                    MessageBox.Show(strError + "\r\n\r\n程序稍后会尝试自动创建这个文件");
             }
 
-            cfgCache.TempDir = Path.Combine(this.DataDir, "cfgcache");
+            cfgCache.TempDir = Path.Combine(this.UserDir, "cfgcache");  // this.DataDir
             cfgCache.InstantSave = true;
 
             // Z39.50 froms
@@ -257,6 +266,14 @@ namespace dp2Catalog
                 MessageBox.Show(this, "装载 EACC 码表文件时发生错误: " + ex.Message);
             }
 
+            // 将 servers.bin 文件从绿色安装目录或者 ClickOnce 安装的数据目录移动到用户目录
+            nRet = MoveDataFile("servers.bin", out strError);
+            if (nRet == -1)
+            {
+                this.ReportError("dp2catalog 移动 servers.bin 文件时出现错误", "(安静报错)" + strError);
+                MessageBox.Show(this, strError);
+            }
+
             // 从文件中装载创建一个dp2ServerCollection对象
             // parameters:
             //		bIgnorFileNotFound	是否不抛出FileNotFoundException异常。
@@ -266,9 +283,8 @@ namespace dp2Catalog
             //			SerializationException	版本迁移时容易出现
             try
             {
-
                 Servers = dp2ServerCollection.Load(
-                    Path.Combine(this.DataDir, "servers.bin"),
+                    Path.Combine(this.UserDir, "servers.bin"),  // this.DataDir
                     true);
                 Servers.ownerForm = this;
             }
@@ -286,7 +302,10 @@ namespace dp2Catalog
 
             this.Servers.ServerChanged += new dp2ServerChangedEventHandle(Servers_ServerChanged);
 
-            if (IsFirstRun == true && this.Servers.Count == 0)
+            if (IsFirstRun == true
+                && bDp2catalogXmlExist == false
+                // && this.Servers.Count == 0
+                )
             {
 #if NO
                 MessageBox.Show(this, "欢迎您安装使用dp2Catalog -- 编目前端");
@@ -366,12 +385,44 @@ namespace dp2Catalog
 #endif
         }
 
-        // 将 dp2catalog.xml 文件中绿色安装目录或者 ClickOnce 安装的数据目录移动到用户目录
-        int MoveDp2catalogXml(out string strError)
+        // 将 zserver.xml 文件中绿色安装目录或者 ClickOnce 安装的数据目录移动到用户目录
+        void MoveZServerXml()
+        {
+            string strOldFileName = Path.Combine(this.DataDir, "zserver.xml");
+            string strNewFileName = Path.Combine(this.UserDir, "zserver.xml");
+            if (File.Exists(strNewFileName) == false)
+            {
+                try
+                {
+                    if (File.Exists(strOldFileName) == true)
+                    {
+                        // 升级到 2.4 的情况。原来数据目录中的 zserver.xml 文件移动过来
+                        File.Copy(strOldFileName, strNewFileName, true);
+                        File.Delete(strOldFileName);    // 删除源文件，以免用户不清楚哪个文件起作用
+                    }
+                    else
+                    {
+                        // 刚安装好的时候，用户目录中还没有文件，于是从 default_zserver.xml 中复制过来
+                        string strDefaultFileName = Path.Combine(this.DataDir, "default_zserver.xml");
+                        Debug.Assert(File.Exists(strDefaultFileName) == true, "");
+                        File.Copy(strDefaultFileName, strNewFileName, true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "复制 zserver.xml 文件时出错: " + ex.Message);
+                }
+            }
+        }
+
+        // 将指定文件文件从绿色安装目录或者 ClickOnce 安装的数据目录移动到用户目录
+        int MoveDataFile(
+            string strPureFileName,
+            out string strError)
         {
             strError = "";
 
-            string strTargetFileName = Path.Combine(this.UserDir, "dp2catalog.xml");
+            string strTargetFileName = Path.Combine(this.UserDir, strPureFileName);
             if (File.Exists(strTargetFileName) == true)
                 return 0;
 
@@ -385,7 +436,7 @@ namespace dp2Catalog
                 strSourceDirectory = Environment.CurrentDirectory;
             }
 
-            string strSourceFileName = Path.Combine(strSourceDirectory, "dp2catalog.xml");
+            string strSourceFileName = Path.Combine(strSourceDirectory, strPureFileName);
             if (File.Exists(strSourceFileName) == false)
                 return 0;   // 没有源文件，无法做什么
 
@@ -457,7 +508,7 @@ string strError)
             }
 
             List<string> types = StringUtil.SplitList(strOpenedMdiWindow);
-            StringUtil.RemoveDup(ref types);
+            StringUtil.RemoveDup(ref types, true);
             // string[] types = strOpenedMdiWindow.Split(new char[] { ',' });
             foreach (string strType in types)
             {
@@ -1431,7 +1482,7 @@ string strError)
                 }
 
                 goto CONTINUE;
-            FOUND:
+                FOUND:
 
                 if (child.GetType().Equals(type) == true)
                 {
@@ -1443,7 +1494,7 @@ string strError)
                     return child;
                 }
 
-            CONTINUE:
+                CONTINUE:
                 hwnd = API.GetWindow(hwnd, API.GW_HWNDNEXT);
             }
 
@@ -1474,16 +1525,15 @@ string strError)
                 dynamic o = form;
                 o.MdiParent = this;
 
-                if (o.MainForm == null)
+                try
                 {
-                    try
-                    {
+                    // 2018/6/24 MainForm 成员可能不存在，可能会抛出异常
+                    if (o.MainForm == null)
                         o.MainForm = this;
-                    }
-                    catch
-                    {
-                        // 等将来所有窗口类型的 MainForm 都是只读的以后，再修改这里
-                    }
+                }
+                catch
+                {
+                    // 等将来所有窗口类型的 MainForm 都是只读的以后，再修改这里
                 }
                 o.Show();
                 return form;
@@ -1506,17 +1556,16 @@ string strError)
                 dynamic o = form;
                 o.MdiParent = this;
 
-                // 2013/3/26
-                if (o.MainForm == null)
+                try
                 {
-                    try
-                    {
+                    // 2013/3/26
+                    // 2018/6/24 MainForm 成员可能不存在，可能会抛出异常
+                    if (o.MainForm == null)
                         o.MainForm = this;
-                    }
-                    catch
-                    {
-                        // 等将来所有窗口类型的 MainForm 都是只读的以后，再修改这里
-                    }
+                }
+                catch
+                {
+                    // 等将来所有窗口类型的 MainForm 都是只读的以后，再修改这里
                 }
                 o.Show();
             }
@@ -2184,7 +2233,7 @@ out string strError)
             if (this.QuickSjhm != null)
                 return 0;
 
-        REDO:
+            REDO:
 
             try
             {
@@ -2230,7 +2279,7 @@ out string strError)
             if (this.QuickPinyin != null)
                 return 0;
 
-        REDO:
+            REDO:
 
             try
             {
@@ -2275,20 +2324,22 @@ out string strError)
             if (this.IsbnSplitter != null)
                 return 0;
 
-        REDO:
+            string strFileName = Path.Combine(this.DataDir, "rangemessage.xml");
+
+            REDO:
 
             try
             {
-                this.IsbnSplitter = new IsbnSplitter(Path.Combine(this.DataDir, "rangemessage.xml"));  // "\\isbn.xml"
+                this.IsbnSplitter = new IsbnSplitter(strFileName);  // "\\isbn.xml"
             }
             catch (FileNotFoundException ex)
             {
-                strError = "装载本地 isbn 规则文件 rangemessage.xml 发生错误 :" + ex.Message;
+                strError = "装载本地 isbn 规则文件 " + strFileName + " 发生错误 :" + ex.Message;
 
                 if (bAutoDownload == true)
                 {
                     string strError1 = "";
-                    int nRet = this.DownloadDataFile("rangemessage.xml",    // "isbn.xml"
+                    int nRet = this.DownloadDataFile(Path.GetFileName(strFileName),    // "isbn.xml"
                         out strError1);
                     if (nRet == -1)
                     {
@@ -3025,7 +3076,7 @@ out string strError)
                         return;
                     }
 
-                // break;
+                    // break;
 
             }
             base.DefWndProc(ref m);
@@ -3055,7 +3106,7 @@ out string strError)
                 return;
             }
 
-        DELETE_FILES:
+            DELETE_FILES:
             FileInfo[] fis = di.GetFiles();
             for (int i = 0; i < fis.Length; i++)
             {
@@ -3524,6 +3575,7 @@ out string strError)
                 //      -1  出错
                 //      0   成功
                 long lRet = channel.GetPinyin(
+                    "pinyin",
                     strText,
                     out strPinyinXml,
                     out strError);
@@ -4013,7 +4065,7 @@ out string strError)
             }
 
             return 0;
-        ERROR1:
+            ERROR1:
             if (string.IsNullOrEmpty(strError) == false)
             {
                 if (strError[0] != ' ')
@@ -4065,7 +4117,7 @@ out string strError)
             }
 
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this, strError);
         }
 
@@ -4132,7 +4184,7 @@ out string strError)
             }
 
             return 1;
-        ERROR1:
+            ERROR1:
             // 不让缓存，因为可能出现了编译错误
             // TODO: 精确区分编译错误
             this.Filters.ClearFilter(strFilterFileName);
@@ -4199,13 +4251,13 @@ out string strError)
             string strBinDir = Environment.CurrentDirectory;
 
             string[] saAddRef1 = {
-					Path.Combine(strBinDir , "digitalplatform.marcdom.dll"),
-					Path.Combine(strBinDir , "digitalplatform.marckernel.dll"),
-					Path.Combine(strBinDir , "digitalplatform.marcquery.dll"),
-					Path.Combine(strBinDir , "digitalplatform.dll"),
-					Path.Combine(strBinDir , "digitalplatform.Text.dll"),
-					Path.Combine(strBinDir , "digitalplatform.IO.dll"),
-					Path.Combine(strBinDir , "digitalplatform.Xml.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.marcdom.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.marckernel.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.marcquery.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.Text.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.IO.dll"),
+                    Path.Combine(strBinDir , "digitalplatform.Xml.dll"),
                     Path.Combine(strBinDir , "digitalplatform.LibraryClient.dll"),  // 2017/1/14
 					Path.Combine(strBinDir , "dp2catalog.exe") };
 
@@ -4240,7 +4292,7 @@ out string strError)
 
             filter.Assembly = assembly;
             return 1;
-        ERROR1:
+            ERROR1:
             return -1;
         }
 
@@ -4316,11 +4368,11 @@ out string strError)
         void SetTitle()
         {
             if (this.TestMode == true)
-                this.Text = "dp2Catalog V2 -- 编目 [评估模式]";
+                this.Text = "dp2Catalog V3 -- 编目 [评估模式]";
             else if (this.CommunityMode == true)
-                this.Text = "dp2Catalog V2 -- 编目 [社区版]";
+                this.Text = "dp2Catalog V3 -- 编目 [社区版]";
             else
-                this.Text = "dp2Catalog V2 -- 编目 [专业版]";
+                this.Text = "dp2Catalog V3 -- 编目 [专业版]";
         }
 
 #if SN
@@ -4382,7 +4434,7 @@ out string strError)
             {
             }
 
-        REDO_VERIFY:
+            REDO_VERIFY:
             if (strSerialCode == "test")
             {
                 if (string.IsNullOrEmpty(strRequirFuncList) == true)
@@ -4416,7 +4468,7 @@ out string strError)
             //string strSha1 = Cryptography.GetSHA1(StringUtil.SortParams(strLocalString) + "_reply");
 
             if (CheckFunction(GetEnvironmentString(""), strRequirFuncList) == false ||
-                // strSha1 != GetCheckCode(strSerialCode) 
+                    // strSha1 != GetCheckCode(strSerialCode) 
                     MatchLocalString(strSerialCode) == false
                     || String.IsNullOrEmpty(strSerialCode) == true)
             {
@@ -4564,7 +4616,7 @@ out string strError)
             dlg.StartPosition = FormStartPosition.CenterScreen;
             dlg.OriginCode = strOriginCode;
 
-        REDO:
+            REDO:
             dlg.ShowDialog(this);
             if (dlg.DialogResult != DialogResult.OK)
                 return 0;
@@ -4636,7 +4688,7 @@ out string strError)
             string strRequirFuncList = "";  // 因为这里是设置通用的序列号，不具体针对哪个功能，所以对设置后，序列号的功能不做检查。只有等到用到具体功能的时候，才能发现序列号是否包含具体功能的 function = ... 参数
 
             string strSerialCode = "";
-        REDO_VERIFY:
+            REDO_VERIFY:
             if (strSerialCode == "test")
             {
                 this.TestMode = true;
@@ -4697,7 +4749,7 @@ out string strError)
                 goto REDO_VERIFY;
             }
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this, strError);
 #endif
         }
@@ -4725,11 +4777,13 @@ out string strError)
             }
         }
 
+        private static readonly Object _syncRoot_errorLog = new Object(); // 2018/6/26
+
         // 写入日志文件。每天创建一个单独的日志文件
         public void WriteErrorLog(string strText)
         {
             FileUtil.WriteErrorLog(
-                this.UserLogDir,
+                _syncRoot_errorLog,
                 this.UserLogDir,
                 strText,
                 "log_",

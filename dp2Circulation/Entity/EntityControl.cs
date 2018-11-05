@@ -1,21 +1,16 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Drawing;
-using System.Data;
 using System.Text;
 using System.Windows.Forms;
 using System.Diagnostics;
 using System.Xml;
-using System.Threading;
 
 using DigitalPlatform;
 using DigitalPlatform.GUI;
 using DigitalPlatform.Xml;
 using DigitalPlatform.Text;
-using DigitalPlatform.CommonControl;
-using DigitalPlatform.CirculationClient;
 using DigitalPlatform.LibraryClient;
 using DigitalPlatform.LibraryClient.localhost;
 
@@ -26,7 +21,6 @@ namespace dp2Circulation
     /// </summary>
     public partial class EntityControl : EntityControlBase
     {
-        public event ShowMessageEventHandler ShowMessage = null;
 
         /*
         // 创建索取号
@@ -60,7 +54,6 @@ namespace dp2Circulation
                 return DomUtil.IsBooleanTrue(e.Value);
             }
         }
-
 
         // 
         // return:
@@ -204,7 +197,7 @@ namespace dp2Circulation
             }
 
             return 1;
-        ERROR1:
+            ERROR1:
             return -1;
         }
 
@@ -723,7 +716,7 @@ namespace dp2Circulation
             }
 
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this, strError);
         }
 
@@ -1364,7 +1357,7 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
                     this.ParentShowMessage("", "", false);
                 }
 
-            REDO:
+                REDO:
                 Program.MainForm.AppInfo.LinkFormState(edit, "EntityEditForm_state");
                 edit.ShowDialog(this);
                 Program.MainForm.AppInfo.UnlinkFormState(edit);
@@ -1673,9 +1666,9 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
         {
             int nRet = 0;
             string strError = "";
-        // bool bOldChanged = this.Changed;
+            // bool bOldChanged = this.Changed;
 
-        REDO_INPUT:
+            REDO_INPUT:
             string strNumber = InputDlg.GetInput(
                 this,
                 "新增多个实体",
@@ -1744,7 +1737,7 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
 
             return;
 
-        ERROR1:
+            ERROR1:
             MessageBox.Show(ForegroundWindow.Instance, strError);
             return;
         }
@@ -1942,7 +1935,7 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
             }
             return;
 
-        ERROR1:
+            ERROR1:
             MessageBox.Show(ForegroundWindow.Instance, strError);
             return;
         }
@@ -2147,7 +2140,7 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
                 }
             }
 
-        SKIP1:
+            SKIP1:
 
             // 对所有实体记录进行条码查重
             if (String.IsNullOrEmpty(strBarcode) == false
@@ -2455,7 +2448,7 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
 
             this.EnableControls(true);
             return 1;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(ForegroundWindow.Instance, strError);
             return -1;
         }
@@ -3607,19 +3600,6 @@ if (String.IsNullOrEmpty(this.BiblioRecPath) == true)
             return this.AppendItem(item, out strError);
         }
 
-        public void ParentShowMessage(string strMessage, string strColor, bool bClickClose)
-        {
-            if (this.ShowMessage != null)
-            {
-                ShowMessageEventArgs e = new ShowMessageEventArgs();
-                e.Message = strMessage;
-                e.Color = strColor;
-                e.ClickClose = bClickClose;
-                this.ShowMessage(this, e);
-                if (string.IsNullOrEmpty(strMessage) == false)
-                    Application.DoEvents();
-            }
-        }
     }
 
     /// <summary>

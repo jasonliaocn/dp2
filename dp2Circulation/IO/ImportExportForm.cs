@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Diagnostics;
-using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -11,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml;
 using System.Collections;
+using System.Web;
 
 using Newtonsoft.Json;
 
@@ -22,10 +20,7 @@ using DigitalPlatform.CommonControl;
 using DigitalPlatform.Text;
 using DigitalPlatform.Range;
 using DigitalPlatform.Marc;
-
 using DigitalPlatform.CirculationClient;
-using System.Web;
-
 
 namespace dp2Circulation
 {
@@ -200,7 +195,7 @@ strStringTable);
 
             this.SetNextButtonEnable();
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this, strError);
         }
 
@@ -510,7 +505,7 @@ Program.MainForm.ActivateFixPage("history")
                     ));
             }
 
-        ERROR1:
+            ERROR1:
             this.Invoke((Action)(() => MessageBox.Show(this, strError)));
             this.ShowMessage(strError, "red", true);
         }
@@ -779,7 +774,7 @@ Program.MainForm.ActivateFixPage("history")
             else
             {
                 int nRedoCount = 0;
-            REDO:
+                REDO:
                 // 创建或者覆盖书目记录
                 string strError = "";
                 string strOutputPath = "";
@@ -952,7 +947,7 @@ new string[] { "重试", "跳过", "中断" });
                     }
                 }
 
-            CONTINUE:
+                CONTINUE:
                 info.BiblioRecPath = strOutputPath;
 
                 string strMessage = (info.BiblioRecCount + 1).ToString() + ":" + strOldPath + "-->" + info.BiblioRecPath;
@@ -1125,7 +1120,7 @@ new string[] { "重试", "跳过", "中断" });
             string strOutputPath = "";
             byte[] baNewTimestamp = null;
             int nRedoCount = 0;
-        REDO:
+            REDO:
             long lRet = info.Channel.SetBiblioInfo(
 info.stop,
 info.Simulate ? "simulate_" + strAction : strAction,
@@ -1249,32 +1244,36 @@ new string[] { "重试", "跳过", "中断" });
 
             List<string> item_xmls = new List<string>();
 
-            // 对下级元素进行循环处理
-            while (true)
+            if (reader.IsEmptyElement == false) // 防范 <dprms:itemCollection /> 这种情况
             {
-                bool bRet = reader.Read();
-                if (bRet == false)
-                    break;
-
-                if (reader.NodeType == XmlNodeType.EndElement)
+                // 对下级元素进行循环处理
+                while (true)
                 {
-                    Debug.Assert(reader.Name == strRootElementName, "");
-                    break;
-                }
+                    bool bRet = reader.Read();
+                    if (bRet == false)
+                        break;
 
-                if (reader.NodeType == XmlNodeType.Element)
-                {
-                    // xxx 元素
-                    // 应当是同级元素中的第一个。因为后面写入册记录等需要知道书目记录的实际写入路径
-                    if (reader.LocalName == strSubElementName
-                        && reader.NamespaceURI == DpNs.dprms)
+                    if (reader.NodeType == XmlNodeType.EndElement)
                     {
-                        item_xmls.Add(reader.ReadOuterXml());
+                        Debug.Assert(reader.Name == strRootElementName, "");
+                        break;
                     }
-                    else
+
+                    if (reader.NodeType == XmlNodeType.Element)
                     {
-                        // 越过不认识的当前元素
-                        reader.ReadEndElement();
+                        // xxx 元素
+                        // 应当是同级元素中的第一个。因为后面写入册记录等需要知道书目记录的实际写入路径
+                        if (reader.LocalName == strSubElementName
+                            && reader.NamespaceURI == DpNs.dprms)
+                        {
+                            item_xmls.Add(reader.ReadOuterXml());
+                        }
+                        else
+                        {
+                            // 越过不认识的当前元素
+                            if (reader.IsEmptyElement == false)
+                                reader.ReadEndElement();
+                        }
                     }
                 }
             }
@@ -1336,7 +1335,7 @@ new string[] { "重试", "跳过", "中断" });
             if (string.IsNullOrEmpty(strItemBarcode) == false)
                 DomUtil.SetElementText(item_dom.DocumentElement,
                     "barcode",
-                    strItemBarcode + "_" + Guid.NewGuid().ToString());
+                    strItemBarcode + "_" + Guid.NewGuid().ToString().ToUpper());
         }
 
         static bool AddBiblioToItem(XmlDocument item_dom, string strBiblioXml)
@@ -1734,7 +1733,7 @@ int nCount)
                     throw new Exception(strError);
                 }
                 if (lRet == -1)
-                    throw new Exception(strError);
+                    throw new ChannelException(info.Channel.ErrorCode, strError);
 
                 if (errorinfos == null || errorinfos.Length == 0)
                     continue;

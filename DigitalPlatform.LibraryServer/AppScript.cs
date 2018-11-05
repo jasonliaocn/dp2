@@ -482,13 +482,12 @@ namespace DigitalPlatform.LibraryServer
             strError = "";
             nResultValue = -1;
 
-            Assembly assembly = null;
             // return:
             //      -1  出错
             //      0   Assembly 为空
             //      1   找到 Assembly
             int nRet = GetAssembly("",
-        out assembly,
+        out Assembly assembly,
         out strError);
             if (nRet == -1)
                 return -1;
@@ -711,6 +710,7 @@ namespace DigitalPlatform.LibraryServer
 
         // 执行脚本函数ItemCanBorrow
         // parameters:
+        //      bResultValue    [out] 是否允许外借。如果返回 true，表示允许外借；false 表示不允许外借
         // return:
         //      -2  not found script
         //      -1  出错
@@ -718,6 +718,7 @@ namespace DigitalPlatform.LibraryServer
         public int DoItemCanBorrowScriptFunction(
             bool bRenew,
             Account account,
+            XmlDocument readerdom,  // 2018/9/30 增加此参数
             XmlDocument itemdom,
             out bool bResultValue,
             out string strMessage,
@@ -730,13 +731,12 @@ namespace DigitalPlatform.LibraryServer
             // test 2016/10/25
             // account.Location = null;
 
-            Assembly assembly = null;
             // return:
             //      -1  出错
             //      0   Assembly 为空
             //      1   找到 Assembly
             int nRet = GetAssembly("",
-        out assembly,
+        out Assembly assembly,
         out strError);
             if (nRet == -1)
                 return -1;
@@ -791,24 +791,51 @@ namespace DigitalPlatform.LibraryServer
 
             host.App = this;
 
+            ParameterInfo[] parameters = mi.GetParameters();
+
+
             // 执行函数
             try
             {
-                object[] args = new object[4];
-                args[0] = bRenew;
-                args[1] = account;
-                args[2] = itemdom;
-                args[3] = strMessage;
-                bResultValue = (bool)mi.Invoke(host,
-                     BindingFlags.DeclaredOnly |
-                     BindingFlags.Public | BindingFlags.NonPublic |
-                     BindingFlags.Instance | BindingFlags.InvokeMethod,
-                     null,
-                     args,
-                     null);
+                if (parameters.Length == 4)
+                {
+                    // 老版本函数
+                    object[] args = new object[4];
+                    args[0] = bRenew;
+                    args[1] = account;
+                    args[2] = itemdom;
+                    args[3] = strMessage;
+                    bResultValue = (bool)mi.Invoke(host,
+                         BindingFlags.DeclaredOnly |
+                         BindingFlags.Public | BindingFlags.NonPublic |
+                         BindingFlags.Instance | BindingFlags.InvokeMethod,
+                         null,
+                         args,
+                         null);
 
-                // 取出out参数值
-                strMessage = (string)args[3];
+                    // 取出out参数值
+                    strMessage = (string)args[3];
+                }
+                else if (parameters.Length == 5)
+                {
+                    // 新版本函数
+                    object[] args = new object[5];
+                    args[0] = bRenew;
+                    args[1] = account;
+                    args[2] = readerdom;
+                    args[3] = itemdom;
+                    args[4] = strMessage;
+                    bResultValue = (bool)mi.Invoke(host,
+                         BindingFlags.DeclaredOnly |
+                         BindingFlags.Public | BindingFlags.NonPublic |
+                         BindingFlags.Instance | BindingFlags.InvokeMethod,
+                         null,
+                         args,
+                         null);
+
+                    // 取出out参数值
+                    strMessage = (string)args[4];
+                }
             }
             catch (Exception ex)
             {
@@ -827,6 +854,7 @@ namespace DigitalPlatform.LibraryServer
         //      0   成功
         public int DoItemCanReturnScriptFunction(
             Account account,
+            XmlDocument readerdom,  // 2018/9/30 增加此参数
             XmlDocument itemdom,
             out bool bResultValue,
             out string strMessage,
@@ -836,13 +864,12 @@ namespace DigitalPlatform.LibraryServer
             strMessage = "";
             bResultValue = false;
 
-            Assembly assembly = null;
             // return:
             //      -1  出错
             //      0   Assembly 为空
             //      1   找到 Assembly
             int nRet = GetAssembly("",
-        out assembly,
+        out Assembly assembly,
         out strError);
             if (nRet == -1)
                 return -1;
@@ -897,23 +924,46 @@ namespace DigitalPlatform.LibraryServer
 
             host.App = this;
 
+            ParameterInfo[] parameters = mi.GetParameters();
+
             // 执行函数
             try
             {
-                object[] args = new object[3];
-                args[0] = account;
-                args[1] = itemdom;
-                args[2] = strMessage;
-                bResultValue = (bool)mi.Invoke(host,
-                     BindingFlags.DeclaredOnly |
-                     BindingFlags.Public | BindingFlags.NonPublic |
-                     BindingFlags.Instance | BindingFlags.InvokeMethod,
-                     null,
-                     args,
-                     null);
+                if (parameters.Length == 3)
+                {
+                    object[] args = new object[3];
+                    args[0] = account;
+                    args[1] = itemdom;
+                    args[2] = strMessage;
+                    bResultValue = (bool)mi.Invoke(host,
+                         BindingFlags.DeclaredOnly |
+                         BindingFlags.Public | BindingFlags.NonPublic |
+                         BindingFlags.Instance | BindingFlags.InvokeMethod,
+                         null,
+                         args,
+                         null);
 
-                // 取出out参数值
-                strMessage = (string)args[2];
+                    // 取出out参数值
+                    strMessage = (string)args[2];
+                }
+                else if (parameters.Length == 4)
+                {
+                    object[] args = new object[4];
+                    args[0] = account;
+                    args[1] = readerdom;
+                    args[2] = itemdom;
+                    args[3] = strMessage;
+                    bResultValue = (bool)mi.Invoke(host,
+                         BindingFlags.DeclaredOnly |
+                         BindingFlags.Public | BindingFlags.NonPublic |
+                         BindingFlags.Instance | BindingFlags.InvokeMethod,
+                         null,
+                         args,
+                         null);
+
+                    // 取出out参数值
+                    strMessage = (string)args[3];
+                }
             }
             catch (Exception ex)
             {
@@ -2081,12 +2131,10 @@ namespace DigitalPlatform.LibraryServer
 
             string strLocation = DomUtil.GetElementText(itemdom.DocumentElement, "location");
             strLocation = StringUtil.GetPureLocationString(strLocation);
-            string strLibraryCode = "";
-            string strRoom = "";
             // 解析
             LibraryApplication.ParseCalendarName(strLocation,
-        out strLibraryCode,
-        out strRoom);
+        out string strLibraryCode,
+        out string strRoom);
 
             // 检查来自 location 元素中的馆代码部分
             {
@@ -2332,7 +2380,6 @@ namespace DigitalPlatform.LibraryServer
             out string strError)
         {
             strError = "";
-            int nRet = 0;
 
             string strOrderTime = DomUtil.GetElementText(itemdom.DocumentElement, "orderTime");
 
@@ -2345,7 +2392,7 @@ namespace DigitalPlatform.LibraryServer
                 catch (Exception ex)
                 {
                     strError = "订购日期字符串 '" + strOrderTime + "' 格式错误: " + ex.Message;
-                    return -1;
+                    return 1;
                 }
             }
 
@@ -2359,15 +2406,173 @@ namespace DigitalPlatform.LibraryServer
                 // return:
                 //      -1  出错
                 //      0   正确
-                nRet = LibraryServerUtil.CheckPublishTimeRange(strRange,
+                int nRet = LibraryServerUtil.CheckPublishTimeRange(strRange,
                     true,   // TODO: 期刊要用 false
                     out strError);
                 if (nRet == -1)
                 {
                     strError = "时间范围字符串 '" + strRange + "' 格式错误: " + strError;
-                    return -1;
+                    return 1;
                 }
             }
+
+            {
+                string strIssueCount = DomUtil.GetElementText(itemdom.DocumentElement, "issueCount");
+
+                if (string.IsNullOrEmpty(strIssueCount) == false)
+                {
+                    if (Int32.TryParse(strIssueCount, out int value) == false)
+                    {
+                        strError = "期数 '" + strIssueCount + "' 不合法。应为正整数";
+                        return 1;
+                    }
+                }
+            }
+
+            {
+                // 检查 discount 元素是否合法。为 0.80[0.90] 这样的形态
+                string strDiscount = DomUtil.GetElementText(itemdom.DocumentElement, "discount");
+
+                if (string.IsNullOrEmpty(strDiscount) == false)
+                {
+                    OldNewValue discount = OldNewValue.Parse(strDiscount);
+                    if (string.IsNullOrEmpty(discount.OldValue) == false
+                        && decimal.TryParse(discount.OldValue, out decimal value) == false)
+                    {
+                        strError = "折扣字符串 '" + strDiscount + "' 中左边部分 '" + discount.OldValue + "' 不合法。应为一个小数";
+                        return -1;
+                    }
+                    if (string.IsNullOrEmpty(discount.NewValue) == false
+        && decimal.TryParse(discount.NewValue, out value) == false)
+                    {
+                        strError = "折扣字符串 '" + strDiscount + "' 中右边部分 '" + discount.NewValue + "' 不合法。应为一个小数";
+                        return -1;
+                    }
+                }
+            }
+
+            {
+                // 检查 fixedPrice 字段值是否合法
+                string strFixedPrice = DomUtil.GetElementText(itemdom.DocumentElement, "fixedPrice");
+
+                if (string.IsNullOrEmpty(strFixedPrice) == false)
+                {
+                    string strPosition = "码洋字段";
+                    // 检查订购价字段内容是否合法
+                    // return:
+                    //      -1  校验过程出错
+                    //      0   校验正确
+                    //      1   校验发现错误
+                    int nRet = dp2StringUtil.VerifyOrderPriceField(strFixedPrice, out strError);
+                    if (nRet == -1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return -1;
+                    }
+                    if (nRet == 1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return 1;
+                    }
+                }
+            }
+
+            {
+                // 检查 price 字段值是否合法
+                string strPrice = DomUtil.GetElementText(itemdom.DocumentElement, "price");
+
+                if (string.IsNullOrEmpty(strPrice) == false)
+                {
+                    string strPosition = "单价字段";
+                    // 检查订购价字段内容是否合法
+                    // return:
+                    //      -1  校验过程出错
+                    //      0   校验正确
+                    //      1   校验发现错误
+                    int nRet = dp2StringUtil.VerifyOrderPriceField(strPrice, out strError);
+                    if (nRet == -1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return -1;
+                    }
+                    if (nRet == 1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return 1;
+                    }
+                }
+            }
+
+            {
+                // 检查 totalPrice 字段值是否合法
+                string strTotalPrice = DomUtil.GetElementText(itemdom.DocumentElement, "totalPrice");
+
+                if (string.IsNullOrEmpty(strTotalPrice) == false)
+                {
+                    string strPosition = "总价字段";
+                    // 检查订购价字段内容是否合法
+                    // return:
+                    //      -1  校验过程出错
+                    //      0   校验正确
+                    //      1   校验发现错误
+                    int nRet = dp2StringUtil.VerifyOrderPriceField(strTotalPrice, out strError);
+                    if (nRet == -1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return -1;
+                    }
+                    if (nRet == 1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return 1;
+                    }
+                }
+            }
+
+            {
+                // 检查 copy 字段值是否合法
+                string strCopy = DomUtil.GetElementText(itemdom.DocumentElement, "copy");
+
+                if (string.IsNullOrEmpty(strCopy) == false)
+                {
+                    string strPosition = "复本字段";
+                    // 检查订购价字段内容是否合法
+                    // return:
+                    //      -1  校验过程出错
+                    //      0   校验正确
+                    //      1   校验发现错误
+                    int nRet = dp2StringUtil.VerifyOrderCopyField(strCopy, out strError);
+                    if (nRet == -1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return -1;
+                    }
+                    if (nRet == 1)
+                    {
+                        strError = strPosition + ": " + strError;
+                        return 1;
+                    }
+                }
+            }
+
+            {
+                // 检查 distribute 字段是否合法
+                // 验证馆藏分配字符串
+                string strDistribute = DomUtil.GetElementText(itemdom.DocumentElement, "distribute");
+
+                if (string.IsNullOrEmpty(strDistribute) == false)
+                {
+                    LocationCollection locations = new LocationCollection();
+                    int nRet = locations.Build(strDistribute, out strError);
+                    if (nRet == -1)
+                    {
+                        strError = "馆藏分配字符串 '" + strDistribute + "' 格式错误: " + strError;
+                        return 1;
+                    }
+                }
+            }
+
+            // 检查几个字段值之间的相互运算关系
 
             return 0;
         }
@@ -2382,6 +2587,22 @@ namespace DigitalPlatform.LibraryServer
         {
             strError = "";
             // int nRet = 0;
+
+            List<string> errors = new List<string>();
+
+            // 2018/8/16
+            string strPublishTime = DomUtil.GetElementText(itemdom.DocumentElement, "publishTime");
+            if (string.IsNullOrEmpty(strPublishTime))
+            {
+                strError = "出版日期字段为空";
+                errors.Add(strError);
+            }
+
+            if (errors.Count > 0)
+            {
+                strError = StringUtil.MakePathList(errors, "; ");
+                return 1;
+            }
 
             return 0;
         }
@@ -3449,4 +3670,21 @@ namespace DigitalPlatform.LibraryServer
         public Assembly Assembly = null;
         public ExternalMessageHost HostObj = null;
     }
+
+#if NO
+    class NameAttribute : Attribute
+    {
+        public NameAttribute(string name)
+        {
+            this._name = name;
+        }
+
+        private string _name;
+        public string Name
+        {
+            get { return _name; }
+            set { _name = value; }
+        }
+    }
+#endif
 }

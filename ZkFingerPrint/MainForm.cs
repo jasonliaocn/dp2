@@ -89,7 +89,7 @@ namespace ZkFingerprint
             this.label_message.Text = "";
             this.TopMost = false;
             return;
-        ERROR1:
+            ERROR1:
             /*
             MessageBox.Show(this, strError,
                 "dp2-中控指纹阅读器接口", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -243,6 +243,18 @@ namespace ZkFingerprint
                 {
                     if (this.WindowState == FormWindowState.Minimized)
                         this.WindowState = FormWindowState.Normal;
+
+                    // 如果 this.TopMost 不奏效，可以试试下面这个 URL 里面的方法
+                    // https://stackoverflow.com/questions/5282588/how-can-i-bring-my-application-window-to-the-front
+                    /*
+                    {
+                        this.WindowState = FormWindowState.Minimized;
+                        this.Show();
+                        this.WindowState = FormWindowState.Normal;
+                    }
+                    */
+
+
                     this.TopMost = true;
                     // SetForegroundWindow(this.Handle);    // 接受键盘输入
                 }
@@ -389,7 +401,7 @@ namespace ZkFingerprint
             if (this.InvokeRequired)
             {
                 _GetImagePanelInfo d = new _GetImagePanelInfo(GetImagePanelInfo);
-                object[] parameters = new object[] {null, null};
+                object[] parameters = new object[] { null, null };
                 IntPtr ret = (IntPtr)this.Invoke(d, parameters);
                 nWidth = (int)parameters[0];
                 nHeight = (int)parameters[1];
@@ -616,7 +628,7 @@ Keys keyData)
                 if (m_fingerprintObj != null)
                 {
                     m_fingerprintObj.CancelGetFingerprintString();
-                } 
+                }
                 return true;
             }
 
@@ -748,7 +760,7 @@ Keys keyData)
         const int DBT_DEVNODES_CHANGED = 0x0007;
         const int DBT_DEVICEARRIVAL = 0x8000;
         const int DBT_DEVICEREMOVALCOMPLETE = 0x8004;
-        const int DBT_DEVTYPVOLUME = 0x00000002;  
+        const int DBT_DEVTYPVOLUME = 0x00000002;
 
 #if NO
         protected override void WndProc(ref Message m)
@@ -873,6 +885,9 @@ Keys keyData)
             }
         }
 
+        private void toolStripSeparator3_Click(object sender, EventArgs e)
+        {
 
+        }
     }
 }

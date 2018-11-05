@@ -1,17 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Collections;
 using System.Web;
-using System.Diagnostics;
 using System.Xml;
 using System.Reflection;
 
 using DigitalPlatform.Marc;
 using DigitalPlatform.Text;
 using DigitalPlatform.LibraryClient;
-using DigitalPlatform.Xml;
 using DigitalPlatform.LibraryClient.localhost;
 
 namespace DigitalPlatform.Script
@@ -71,6 +68,10 @@ namespace DigitalPlatform.Script
         /// <returns>返回库名部分</returns>
         public static string GetDbName(string strPath)
         {
+            // 2018/10/24
+            if (strPath == null)
+                return "";
+
             int nRet = strPath.LastIndexOf("/");
             if (nRet == -1)
                 return strPath;
@@ -88,6 +89,10 @@ namespace DigitalPlatform.Script
         /// <returns>返回记录号部分</returns>
         public static string GetRecordID(string strPath)
         {
+            // 2018/10/24
+            if (strPath == null)
+                return "";
+
             int nRet = strPath.LastIndexOf("/");
             if (nRet == -1)
                 return "";
@@ -106,16 +111,20 @@ namespace DigitalPlatform.Script
                 return strUri;
 
             if (StringUtil.HasHead(strUri, "uri:") == true)
+            {
                 strUri = strUri.Substring(4).Trim();
+                // 2018/11/2
+                if (strUri.IndexOf("@") != -1)
+                    return strUri;
+            }
 
             string strDbName = GetDbName(strRecPath);
             string strRecID = GetRecordID(strRecPath);
 
-            string strOutputUri = "";
             ReplaceUri(strUri,
                 strDbName,
                 strRecID,
-                out strOutputUri);
+                out string strOutputUri);
 
             return strOutputUri;
         }
@@ -248,6 +257,18 @@ namespace DigitalPlatform.Script
                 style);
         }
 
+        public static string BuildObjectHtmlTable(string strMARC,
+    string strRecPath,
+    XmlElement maps_container,
+    string strMarcSyntax)
+        {
+            return BuildObjectHtmlTable(strMARC,
+    strRecPath,
+    maps_container,
+    BuildObjectHtmlTableStyle.HttpUrlHitCount | BuildObjectHtmlTableStyle.Template,
+    strMarcSyntax);
+        }
+
         // 创建 OPAC 详细页面中的对象资源显示局部 HTML。这是一个 <table> 片段
         // 前导语 $3
         // 链接文字 $y $f
@@ -259,7 +280,8 @@ namespace DigitalPlatform.Script
         public static string BuildObjectHtmlTable(string strMARC,
             string strRecPath,
             XmlElement maps_container,
-            BuildObjectHtmlTableStyle style = BuildObjectHtmlTableStyle.HttpUrlHitCount | BuildObjectHtmlTableStyle.Template)
+            BuildObjectHtmlTableStyle style = BuildObjectHtmlTableStyle.HttpUrlHitCount | BuildObjectHtmlTableStyle.Template,
+            string strMarcSyntax = "unimarc")
         {
             // Debug.Assert(false, "");
 
@@ -273,7 +295,7 @@ namespace DigitalPlatform.Script
 
             text.Append("<table class='object_table'>");
             text.Append("<tr class='column_title'>");
-            text.Append("<td class='type' style='word-break:keep-all;'>名称</td>");
+            text.Append("<td class='type' style='word-break:keep-all;'>材料</td>");
             text.Append("<td class='hitcount'></td>");
             text.Append("<td class='link' style='word-break:keep-all;'>链接</td>");
             text.Append("<td class='mime' style='word-break:keep-all;'>媒体类型</td>");
@@ -297,114 +319,170 @@ namespace DigitalPlatform.Script
                 string strSize = (string)table["size"];
                 string s_q = field.select("subfield[@name='q']").FirstContent;  // 注意， FirstContent 可能会返回 null
 
-                string u = field.select("subfield[@name='u']").FirstContent;
-                string strUri = MakeObjectUrl(strRecPath, u);
-                Hashtable parameters = new Hashtable();
-                if (maps_container != null
-                    && (style & BuildObjectHtmlTableStyle.Template) != 0)
+                List<Map856uResult> u_list = new List<Map856uResult>();
                 {
-                    // return:
-                    //     -1  出错
-                    //     0   没有发生宏替换
-                    //     1   发生了宏替换
-                    int nRet = Map856u(u,
-                        strRecPath,
-                        maps_container,
-                        parameters,
-                        out strUri,
-                        out string strError);
-                    if (nRet == -1)
-                        strUri = "!error:" + strError;
-                }
-
-                string strSaveAs = "";
-                if (string.IsNullOrEmpty(s_q) == true
-                    || StringUtil.MatchMIME(s_q, "text") == true
-                    || StringUtil.MatchMIME(s_q, "image") == true)
-                {
-
-                }
-                else
-                {
-                    strSaveAs = "&saveas=true";
-                }
-                string strHitCountImage = "";
-                string strObjectUrl = strUri;
-                if (StringUtil.IsHttpUrl(strUri) == false)
-                {
-                    // 内部对象
-                    strObjectUrl = "./getobject.aspx?uri=" + HttpUtility.UrlEncode(strUri) + strSaveAs;
-                    strHitCountImage = "<img src='" + strObjectUrl + "&style=hitcount' alt='hitcount'></img>";
-                }
-                else
-                {
-                    // http: 或 https: 的情形，即外部 URL
-                    if ((style & BuildObjectHtmlTableStyle.HttpUrlHitCount) != 0)
+                    string u = field.select("subfield[@name='u']").FirstContent;
+                    // Hashtable parameters = new Hashtable();
+                    if (maps_container != null
+                        && (style & BuildObjectHtmlTableStyle.Template) != 0)
                     {
-                        strObjectUrl = "./getobject.aspx?uri=" + HttpUtility.UrlEncode(strUri) + strSaveAs + "&biblioRecPath=" + HttpUtility.UrlEncode(strRecPath);
-                        strHitCountImage = "<img src='" + strObjectUrl + "&style=hitcount&biblioRecPath=" + HttpUtility.UrlEncode(strRecPath) + "' alt='hitcount'></img>";
+                        // return:
+                        //     -1  出错
+                        //     0   没有发生宏替换
+                        //     1   发生了宏替换
+                        int nRet = Map856u(u,
+                            strRecPath,
+                            maps_container,
+                            // parameters,
+                            out u_list, // strUri,
+                            out string strError);
+                        //if (nRet == -1)
+                        //    strUri = "!error:" + strError;
+                        if (nRet == -1)
+                            u_list.Add(new Map856uResult { Result = "!error: 对 858$u 内容 '" + u + "' 进行映射变换时出错: " + strError });
+                    }
+                    else
+                    {
+                        u_list.Add(new Map856uResult { Result = u });
                     }
                 }
 
-                string y = field.select("subfield[@name='y']").FirstContent;
-                string f = field.select("subfield[@name='f']").FirstContent;
-
-                string urlLabel = "";
-                if (string.IsNullOrEmpty(y) == false)
-                    urlLabel = y;
-                else
-                    urlLabel = f;
-                if (string.IsNullOrEmpty(urlLabel) == true)
-                    urlLabel = strType;
-
-                // 2015/11/26
-                string s_z = field.select("subfield[@name='z']").FirstContent;
-                if (string.IsNullOrEmpty(urlLabel) == true
-                    && string.IsNullOrEmpty(s_z) == false)
+                foreach (Map856uResult result in u_list)
                 {
-                    urlLabel = s_z;
-                    s_z = "";
-                }
+                    string strUri = MakeObjectUrl(strRecPath, result.Result);
+                    Hashtable parameters = result.Parameters;
 
-                if (string.IsNullOrEmpty(urlLabel) == true)
-                    urlLabel = strObjectUrl;
-
-                if (strUri.StartsWith("!error:"))
-                    urlLabel += strUri;
-                string urlTemp = "";
-                if (String.IsNullOrEmpty(strObjectUrl) == false)
-                {
-                    string strParameters = "";
-                    foreach (string name in parameters.Keys)
+                    string strSaveAs = "";
+                    if (string.IsNullOrEmpty(s_q) == true
+                        // || StringUtil.MatchMIME(s_q, "text") == true
+                        || StringUtil.MatchMIME(s_q, "image") == true)
                     {
-                        strParameters += HttpUtility.HtmlAttributeEncode(name) + "='" + HttpUtility.HtmlAttributeEncode(parameters[name] as string) + "' "; // 注意，内容里面是否有单引号？
+
                     }
-                    urlTemp += "<a href='" + strObjectUrl + "' " + strParameters.Trim() + " >";
-                    urlTemp += urlLabel;
-                    urlTemp += "</a>";
-                }
-                else
-                    urlTemp = urlLabel;
+                    else
+                    {
+                        strSaveAs = "&saveas=true";
+                    }
+                    string strHitCountImage = "";
+                    string strObjectUrl = strUri;
+                    string strPdfUrl = "";
+                    string strThumbnailUrl = "";
+                    if (StringUtil.IsHttpUrl(strUri) == false)
+                    {
+                        // 内部对象
+                        strObjectUrl = "./getobject.aspx?uri=" + HttpUtility.UrlEncode(strUri) + strSaveAs;
+                        strHitCountImage = "<img src='" + strObjectUrl + "&style=hitcount' alt='hitcount'></img>";
+                        if (s_q == "application/pdf")
+                        {
+                            strPdfUrl = "./viewpdf.aspx?uri=" + HttpUtility.UrlEncode(strUri);
+                            strThumbnailUrl = "./getobject.aspx?uri=" + HttpUtility.UrlEncode(strUri + "/page:1,format=jpeg,dpi:24");
+                        }
+                    }
+                    else
+                    {
+                        // http: 或 https: 的情形，即外部 URL
+                        if ((style & BuildObjectHtmlTableStyle.HttpUrlHitCount) != 0)
+                        {
+                            strObjectUrl = "./getobject.aspx?uri=" + HttpUtility.UrlEncode(strUri) + strSaveAs + "&biblioRecPath=" + HttpUtility.UrlEncode(strRecPath);
+                            strHitCountImage = "<img src='" + strObjectUrl + "&style=hitcount&biblioRecPath=" + HttpUtility.UrlEncode(strRecPath) + "' alt='hitcount'></img>";
+                        }
+                    }
 
-                string s_3 = field.select("subfield[@name='3']").FirstContent;
-                string s_s = field.select("subfield[@name='s']").FirstContent;
+                    string linkText = "";
 
-                text.Append("<tr class='content'>");
-                text.Append("<td class='type'>" + HttpUtility.HtmlEncode(s_3 + " " + strType) + "</td>");
-                text.Append("<td class='hitcount' style='text-align: right;'>" + strHitCountImage + "</td>");
-                text.Append("<td class='link' style='word-break:break-all;'>" + urlTemp + "</td>");
-                text.Append("<td class='mime'>" + HttpUtility.HtmlEncode(s_q) + "</td>");
-                text.Append("<td class='size'>" + HttpUtility.HtmlEncode(strSize) + "</td>");
-                text.Append("<td class='bytes'>" + HttpUtility.HtmlEncode(s_s) + "</td>");
-                text.Append("</tr>");
+                    if (strMarcSyntax == "unimarc")
+                        linkText = field.select("subfield[@name='2']").FirstContent;
+                    else
+                        linkText = field.select("subfield[@name='y']").FirstContent;
 
-                if (string.IsNullOrEmpty(s_z) == false)
-                {
-                    text.Append("<tr class='comment'>");
-                    text.Append("<td colspan='6'>" + HttpUtility.HtmlEncode(s_z) + "</td>");
+                    string f = field.select("subfield[@name='f']").FirstContent;
+
+                    string urlLabel = "";
+                    if (string.IsNullOrEmpty(linkText) == false)
+                        urlLabel = linkText;
+                    else
+                        urlLabel = f;
+                    if (string.IsNullOrEmpty(urlLabel) == true)
+                        urlLabel = strType;
+
+                    // 2015/11/26
+                    string s_z = field.select("subfield[@name='z']").FirstContent;
+                    if (string.IsNullOrEmpty(urlLabel) == true
+                        && string.IsNullOrEmpty(s_z) == false)
+                    {
+                        urlLabel = s_z;
+                        s_z = "";
+                    }
+
+                    if (string.IsNullOrEmpty(urlLabel) == true)
+                        urlLabel = strObjectUrl;
+
+                    if (strUri.StartsWith("!error:"))
+                        urlLabel += strUri;
+
+                    // 2018/11/5
+                    urlLabel = Map856uResult.MacroAnchorText(result.AnchorText, urlLabel);
+
+                    if (string.IsNullOrEmpty(strPdfUrl) == false && string.IsNullOrEmpty(urlLabel) == false)
+                        strPdfUrl += "&title=" + HttpUtility.UrlEncode(urlLabel);
+
+                    string urlTemp = "";
+                    if (String.IsNullOrEmpty(strObjectUrl) == false)
+                    {
+                        string strParameters = "";
+                        if (parameters != null)
+                        {
+                            foreach (string name in parameters.Keys)
+                            {
+                                strParameters += HttpUtility.HtmlAttributeEncode(name) + "='" + HttpUtility.HtmlAttributeEncode(parameters[name] as string) + "' "; // 注意，内容里面是否有单引号？
+                            }
+                        }
+                        urlTemp += "<a class='link' href='" + strObjectUrl + "' " + strParameters.Trim() + " >";
+                        urlTemp += HttpUtility.HtmlEncode(
+                            (string.IsNullOrEmpty(strSaveAs) == false ? "下载 " : "")
+                            + urlLabel);
+                        urlTemp += "</a>";
+
+                        if (string.IsNullOrEmpty(strPdfUrl) == false)
+                        {
+#if NO
+                        // 预览 按钮
+                        urlTemp += "<br/><a href='" + strPdfUrl + "' target='_blank'>";
+                        urlTemp += HttpUtility.HtmlEncode("预览 " + urlLabel);
+                        urlTemp += "</a>";
+#endif
+
+                            // 缩略图 点按和预览按钮效果相同
+                            urlTemp += "<br/><a class='thumbnail' href='" + strPdfUrl + "' target='_blank' alt='" + HttpUtility.HtmlEncode("在线阅读 " + urlLabel) + "'>";
+                            urlTemp += "<img src='" + strThumbnailUrl + "' alt='" + HttpUtility.HtmlEncode("在线阅读 " + urlLabel) + "'></img>";
+                            urlTemp += "</a>";
+                        }
+                    }
+                    else
+                        urlTemp = urlLabel;
+
+                    // Different parts of the item are electronic, using subfield $3 to indicate the part (e.g., table of contents accessible in one file and an abstract in another)
+                    // 意思就是，如果有多种部分是电子资源，用 $3 指明当前 856 针对的哪个部分。这时候有多个 856，每个 856 中的 $3 各不相同
+                    string s_3 = field.select("subfield[@name='3']").FirstContent;
+                    string s_s = field.select("subfield[@name='s']").FirstContent;
+
+                    text.Append("<tr class='content'>");
+                    text.Append("<td class='type'>" + HttpUtility.HtmlEncode(s_3 + " " + strType) + "</td>");
+                    text.Append("<td class='hitcount' style='text-align: right;'>" + strHitCountImage + "</td>");
+                    text.Append("<td class='link' style='word-break:break-all;'>" + urlTemp + "</td>");
+                    text.Append("<td class='mime'>" + HttpUtility.HtmlEncode(s_q) + "</td>");
+                    text.Append("<td class='size'>" + HttpUtility.HtmlEncode(strSize) + "</td>");
+                    text.Append("<td class='bytes'>" + HttpUtility.HtmlEncode(s_s) + "</td>");
                     text.Append("</tr>");
+
+                    if (string.IsNullOrEmpty(s_z) == false)
+                    {
+                        text.Append("<tr class='comment'>");
+                        text.Append("<td colspan='6'>" + HttpUtility.HtmlEncode(s_z) + "</td>");
+                        text.Append("</tr>");
+                    }
+                    nCount++;
                 }
-                nCount++;
             }
 
             if (nCount == 0)
@@ -417,6 +495,119 @@ namespace DigitalPlatform.Script
 
         #region 856 maps function
 
+        public class Map856uResult
+        {
+            // 模板兑现宏以后的结果
+            public string Result { get; set; }
+            // 环境参数
+            public Hashtable Parameters { get; set; }
+            // 锚点文字附加部分
+            public string AnchorText { get; set; }
+
+            public static string MacroAnchorText(string template, string old_text)
+            {
+                if (template == null)
+                    return old_text;
+                return template.Replace("{text}", old_text);
+            }
+        }
+
+        /*
+<856_maps>
+<item type="cxstar" template="http://www.cxstar.com:5000/Book/Detail?pinst=1ca53a3a0001390bce&ruid=%uri%" />
+<item type="default" template="http://localhost:8081/dp2OPAC/getobject.aspx?uri=%object_id%" />
+<item type="default" template="%getobject_module%?uri=%object_path%" />
+</856_maps>
+ * 
+ * */
+        // return:
+        //     -1  出错
+        //     0   没有发生宏替换
+        //     1   发生了宏替换
+        public static int Map856u(string u,
+            string strBiblioRecPath,
+            XmlElement container,
+            // Hashtable parameters,
+            out List<Map856uResult> results,
+            out string strError)
+        {
+            strError = "";
+
+            results = new List<Map856uResult>();
+
+            if (string.IsNullOrEmpty(u))
+            {
+                results.Add(new Map856uResult { Result = u });
+                return 0;
+            }
+
+            if (StringUtil.HasHead(u, "uri:") == false)
+            {
+                results.Add(new Map856uResult { Result = u });
+                return 0;
+            }
+
+            u = u.Substring(4).Trim();
+
+            List<string> parts = StringUtil.ParseTwoPart(u, "@");
+            string uri = parts[0];
+            string type = parts[1];
+
+            XmlNodeList items = null;
+            if (string.IsNullOrEmpty(type))
+            {
+                items = container.SelectNodes("item[@type='default']");
+                if (items.Count == 0)
+                {
+                    strError = "配置文件中没有配置 type='default' 的 856_maps/item 元素";
+                    return -1;
+                }
+            }
+            else
+            {
+                items = container.SelectNodes("item[@type='" + type + "']");
+                if (items.Count == 0)
+                {
+                    strError = "配置文件中没有配置 type='" + type + "' 的 856_maps/item 元素";
+                    return -1;
+                }
+            }
+
+            foreach (XmlElement item in items)
+            {
+                string template = item.GetAttribute("template");
+                if (string.IsNullOrEmpty(template))
+                {
+                    strError = "配置文件中元素 " + item.OuterXml + " 没有配置 template 属性";
+                    return -1;
+                }
+
+                Hashtable parameters = new Hashtable();
+
+                // 取得 _xxxx 属性值
+                if (parameters != null)
+                {
+                    foreach (XmlAttribute attr in item.Attributes)
+                    {
+                        if (attr.Name.StartsWith("_"))
+                            parameters[attr.Name.Substring(1)] = attr.Value;
+                    }
+                }
+
+                string object_path = MakeObjectUrl(strBiblioRecPath, uri);
+
+                string result = template.Replace("{object_path}", HttpUtility.UrlEncode(object_path));
+                result = result.Replace("{uri}", HttpUtility.UrlEncode(uri));
+                result = result.Replace("{getobject_module}", "./getobject.aspx");
+
+                string anchorText = item.HasAttribute("anchorText") ? item.GetAttribute("anchorText") : null;
+                results.Add(new Map856uResult { Result = result, Parameters = parameters, AnchorText = anchorText });
+            }
+
+            return 1;
+        }
+
+#if NO
         /*
 <856_maps>
 <item type="cxstar" template="http://www.cxstar.com:5000/Book/Detail?pinst=1ca53a3a0001390bce&ruid=%uri%" />
@@ -447,15 +638,6 @@ namespace DigitalPlatform.Script
 
             u = u.Substring(4).Trim();
 
-#if NO
-            XmlElement container = this.WebUiDom.DocumentElement.SelectSingleNode("856_maps") as XmlElement;
-            if (container == null)
-            {
-                strError = "webui.xml 中没有配置 856_maps 元素";
-                return -1;
-            }
-#endif
-
             List<string> parts = StringUtil.ParseTwoPart(u, "@");
             string uri = parts[0];
             string type = parts[1];
@@ -466,7 +648,7 @@ namespace DigitalPlatform.Script
                 item = container.SelectSingleNode("item[@type='default']") as XmlElement;
                 if (item == null)
                 {
-                    strError = "webui.xml 中没有配置 type='default' 的 856_maps/item 元素";
+                    strError = "配置文件中没有配置 type='default' 的 856_maps/item 元素";
                     return -1;
                 }
             }
@@ -475,7 +657,7 @@ namespace DigitalPlatform.Script
                 item = container.SelectSingleNode("item[@type='" + type + "']") as XmlElement;
                 if (item == null)
                 {
-                    strError = "webui.xml 中没有配置 type='" + type + "' 的 856_maps/item 元素";
+                    strError = "配置文件中没有配置 type='" + type + "' 的 856_maps/item 元素";
                     return -1;
                 }
             }
@@ -483,7 +665,7 @@ namespace DigitalPlatform.Script
             string template = item.GetAttribute("template");
             if (string.IsNullOrEmpty(template))
             {
-                strError = "webui.xml 中元素 " + item.OuterXml + " 没有配置 template 属性";
+                strError = "配置文件中元素 " + item.OuterXml + " 没有配置 template 属性";
                 return -1;
             }
 
@@ -504,9 +686,9 @@ namespace DigitalPlatform.Script
             result = result.Replace("{getobject_module}", "./getobject.aspx");
             return 1;
         }
+#endif
 
         #endregion
-
 
         // 创建 table 中的对象资源局部 XML。这是一个 <table> 片段
         // 前导语 $3
@@ -518,7 +700,10 @@ namespace DigitalPlatform.Script
         // 公开注释 $z
         public static string BuildObjectXmlTable(string strMARC,
             // string strRecPath,
-            BuildObjectHtmlTableStyle style = BuildObjectHtmlTableStyle.None)
+            BuildObjectHtmlTableStyle style = BuildObjectHtmlTableStyle.None,
+            string strMarcSyntax = "unimarc",
+            string strRecPath = null,
+            XmlElement maps_container = null)
         {
             // Debug.Assert(false, "");
 
@@ -547,8 +732,34 @@ namespace DigitalPlatform.Script
                 string strSize = (string)table["size"];
                 string s_q = field.select("subfield[@name='q']").FirstContent;  // 注意， FirstContent 可能会返回 null
 
-                string u = field.select("subfield[@name='u']").FirstContent;
-                // string strUri = MakeObjectUrl(strRecPath, u);
+                List<Map856uResult> u_list = new List<Map856uResult>();
+                {
+                    string u = field.select("subfield[@name='u']").FirstContent;
+
+                    // 2018/10/24
+                    // Hashtable parameters = new Hashtable();
+                    if (maps_container != null
+                        && (style & BuildObjectHtmlTableStyle.Template) != 0)
+                    {
+                        // string strUri = MakeObjectUrl(strRecPath, u);
+                        // return:
+                        //     -1  出错
+                        //     0   没有发生宏替换
+                        //     1   发生了宏替换
+                        int nRet = Map856u(u,
+                            strRecPath,
+                            maps_container,
+                            // parameters,
+                            out u_list,
+                            out string strError);
+                        if (nRet == -1)
+                            u_list.Add(new Map856uResult { Result = "!error: 对 858$u 内容 '" + u + "' 进行映射变换时出错: " + strError });
+                    }
+                    else
+                    {
+                        u_list.Add(new Map856uResult { Result = u });
+                    }
+                }
 
                 string strSaveAs = "";
                 if (string.IsNullOrEmpty(s_q) == true   // 2016/9/4
@@ -562,12 +773,30 @@ namespace DigitalPlatform.Script
                     strSaveAs = "true";
                 }
 
+#if NO
                 string y = field.select("subfield[@name='y']").FirstContent;
                 string f = field.select("subfield[@name='f']").FirstContent;
 
                 string urlLabel = "";
                 if (string.IsNullOrEmpty(y) == false)
                     urlLabel = y;
+                else
+                    urlLabel = f;
+                if (string.IsNullOrEmpty(urlLabel) == true)
+                    urlLabel = strType;
+#endif
+                string linkText = "";
+
+                if (strMarcSyntax == "unimarc")
+                    linkText = field.select("subfield[@name='2']").FirstContent;
+                else
+                    linkText = field.select("subfield[@name='y']").FirstContent;
+
+                string f = field.select("subfield[@name='f']").FirstContent;
+
+                string urlLabel = "";
+                if (string.IsNullOrEmpty(linkText) == false)
+                    urlLabel = linkText;
                 else
                     urlLabel = f;
                 if (string.IsNullOrEmpty(urlLabel) == true)
@@ -582,8 +811,6 @@ namespace DigitalPlatform.Script
                     s_z = "";
                 }
 
-                if (string.IsNullOrEmpty(urlLabel) == true)
-                    urlLabel = u;
 
 #if NO
                 string urlTemp = "";
@@ -600,34 +827,54 @@ namespace DigitalPlatform.Script
                 string s_3 = field.select("subfield[@name='3']").FirstContent;
                 string s_s = field.select("subfield[@name='s']").FirstContent;
 
-                XmlElement line = dom.CreateElement("line");
-                dom.DocumentElement.AppendChild(line);
+                foreach (Map856uResult u in u_list)
+                {
+                    XmlElement line = dom.CreateElement("line");
+                    dom.DocumentElement.AppendChild(line);
 
-                string strTypeString = (s_3 + " " + strType).Trim();
-                if (string.IsNullOrEmpty(strTypeString) == false)
-                    line.SetAttribute("type", strTypeString);
+                    string strTypeString = (s_3 + " " + strType).Trim();
+                    if (string.IsNullOrEmpty(strTypeString) == false)
+                        line.SetAttribute("type", strTypeString);
 
-                if (string.IsNullOrEmpty(urlLabel) == false)
-                    line.SetAttribute("urlLabel", urlLabel);
+                    string currentUrlLabel = urlLabel;
+                    if (string.IsNullOrEmpty(currentUrlLabel) == true)
+                    {
+                        if (u.AnchorText != null)
+                            currentUrlLabel = Map856uResult.MacroAnchorText(u.AnchorText, currentUrlLabel);
+                        else
+                            currentUrlLabel = u.Result;
+                    }
+                    else
+                    {
+                        if (u.AnchorText != null)
+                            currentUrlLabel = Map856uResult.MacroAnchorText(u.AnchorText, urlLabel);
+                    }
 
-                if (string.IsNullOrEmpty(u) == false)
-                    line.SetAttribute("uri", u);
+                    if (string.IsNullOrEmpty(currentUrlLabel) == false)
+                        line.SetAttribute("urlLabel", currentUrlLabel);
 
-                if (string.IsNullOrEmpty(s_q) == false)
-                    line.SetAttribute("mime", s_q);
+                    if (string.IsNullOrEmpty(u.Result) == false)
+                        line.SetAttribute("uri", u.Result);
 
-                if (string.IsNullOrEmpty(strSize) == false)
-                    line.SetAttribute("size", strSize);
+                    if (u.Parameters != null && u.Parameters.Count > 0)
+                        line.SetAttribute("uriEnv", StringUtil.BuildParameterString(u.Parameters, ',', '=', "url"));
 
-                if (string.IsNullOrEmpty(s_s) == false)
-                    line.SetAttribute("bytes", s_s);
+                    if (string.IsNullOrEmpty(s_q) == false)
+                        line.SetAttribute("mime", s_q);
 
-                if (string.IsNullOrEmpty(strSaveAs) == false)
-                    line.SetAttribute("saveAs", strSaveAs);
+                    if (string.IsNullOrEmpty(strSize) == false)
+                        line.SetAttribute("size", strSize);
 
-                if (string.IsNullOrEmpty(s_z) == false)
-                    line.SetAttribute("comment", s_z);
-                nCount++;
+                    if (string.IsNullOrEmpty(s_s) == false)
+                        line.SetAttribute("bytes", s_s);
+
+                    if (string.IsNullOrEmpty(strSaveAs) == false)
+                        line.SetAttribute("saveAs", strSaveAs);
+
+                    if (string.IsNullOrEmpty(s_z) == false)
+                        line.SetAttribute("comment", s_z);
+                    nCount++;
+                }
             }
 
             if (nCount == 0)

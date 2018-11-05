@@ -2565,6 +2565,7 @@ namespace dp2Circulation
                 DoBinding("记到", "auto");    // 
         }
 
+#if NO
         void DoIssueManage()
         {
             string strError = "";
@@ -2603,7 +2604,6 @@ namespace dp2Circulation
                         return;
                 }
             }
-
 
             // 
             if (this.Items == null)
@@ -2856,7 +2856,7 @@ namespace dp2Circulation
         ERROR1:
             MessageBox.Show(this, strError);
         }
-
+#endif
         void dlg_GetValueTable(object sender, GetValueTableEventArgs e)
         {
             string strError = "";
@@ -3056,7 +3056,7 @@ namespace dp2Circulation
 
                         // source内采用新值
                         // 分离 "old[new]" 内的两个值
-                        OrderDesignControl.ParseOldNewValue(strSource,
+                        dp2StringUtil.ParseOldNewValue(strSource,
                             out strOldValue,
                             out strNewValue);
                         DomUtil.SetElementText(dom.DocumentElement,
@@ -3067,7 +3067,7 @@ namespace dp2Circulation
                             "price");
 
                         // price内采用新值
-                        OrderDesignControl.ParseOldNewValue(strPrice,
+                        dp2StringUtil.ParseOldNewValue(strPrice,
                             out strOldValue,
                             out strNewValue);
                         DomUtil.SetElementText(dom.DocumentElement,

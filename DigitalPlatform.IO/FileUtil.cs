@@ -267,6 +267,9 @@ out strError);
         }
 
         // 写入日志文件。每天创建一个单独的日志文件
+        // Exception:
+        //      可能会抛出异常。
+        //      System.UnauthorizedAccessException 对路径的访问被拒绝。
         public static void WriteErrorLog(
             object lockObj,
             string strLogDir,
@@ -281,6 +284,9 @@ out strError);
                 // 每天一个日志文件
                 string strFilename = Path.Combine(strLogDir, strPrefix + DateTimeUtil.DateTimeToString8(now) + strPostfix);
                 string strTime = now.ToString();
+                // Exception:
+                //      可能会抛出异常。
+                //      System.UnauthorizedAccessException 对路径的访问被拒绝。
                 StreamUtil.WriteText(strFilename,
                     strTime + " " + strText + "\r\n");
             }
@@ -333,7 +339,7 @@ out strError);
                     else
                     {
                         long lLoadedLength = 0;
-                        StringBuilder temp = new StringBuilder(4096);
+                        StringBuilder temp = new StringBuilder();
                         for (; ; )
                         {
                             string strLine = sr.ReadLine();

@@ -18,7 +18,6 @@ using DigitalPlatform.Script;
 using DigitalPlatform.Xml;
 using DigitalPlatform.IO;
 
-using DigitalPlatform.GcatClient;
 using DigitalPlatform.CirculationClient;
 using DigitalPlatform.LibraryClient;
 
@@ -212,10 +211,12 @@ namespace dp2Circulation
         /// </summary>
         public EntityForm DetailForm = null;
 
+#if OLD_CODE
         /// <summary>
         /// GCAT 通讯通道
         /// </summary>
         DigitalPlatform.GcatClient.Channel GcatChannel = null;
+#endif
 
         /// <summary>
         /// 构造函数
@@ -229,8 +230,10 @@ namespace dp2Circulation
 
         public void Dispose()
         {
+#if OLD_CODE
             if (this.GcatChannel != null)
                 this.GcatChannel.Dispose();
+#endif
 
             // 2017/4/23
             if (this.DetailForm != null)
@@ -713,7 +716,7 @@ namespace dp2Circulation
                 this.DetailForm.MarcEditor.Focus();
             }
             return 0;
-        ERROR1:
+            ERROR1:
             if (string.IsNullOrEmpty(strError) == false)
             {
                 if (strError[0] != ' ')
@@ -902,7 +905,7 @@ namespace dp2Circulation
                 this.DetailForm.MarcEditor.Focus();
             }
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this.DetailForm, strError);
         }
         /*
@@ -1030,8 +1033,10 @@ namespace dp2Circulation
 
         void DoGcatStop(object sender, StopEventArgs e)
         {
+#if OLD_CODE
             if (this.GcatChannel != null)
                 this.GcatChannel.Abort();
+#endif
         }
 
         bool bMarcEditorFocued = false;
@@ -1321,6 +1326,7 @@ namespace dp2Circulation
             if (String.IsNullOrEmpty(strGcatWebServiceUrl) == true)
                 strGcatWebServiceUrl = "http://dp2003.com/dp2library/";  // "http://dp2003.com/gcatserver/"    //  "http://dp2003.com/dp2libraryws/gcat.asmx";
 
+#if OLD_CODE
             if (strGcatWebServiceUrl.IndexOf(".asmx") != -1)
             {
 
@@ -1372,7 +1378,7 @@ namespace dp2Circulation
                 if (question_table == null)
                     question_table = new Hashtable();
 
-            REDO_GETNUMBER:
+                REDO_GETNUMBER:
                 string strDebugInfo = "";
 
                 BeginGcatLoop("正在获取 '" + strAuthor + "' 的著者号，从 " + strGcatWebServiceUrl + " ...");
@@ -1437,7 +1443,9 @@ namespace dp2Circulation
                     EndGcatLoop();
                 }
             }
-            else // dp2library 服务器
+            else 
+#endif
+            // dp2library 服务器
             {
                 Hashtable question_table = (Hashtable)Program.MainForm.ParamTable["question_table"];
                 if (question_table == null)
@@ -1973,7 +1981,7 @@ namespace dp2Circulation
             dlg.Show();
 
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this.DetailForm, strError);
         }
 
@@ -2429,7 +2437,7 @@ namespace dp2Circulation
                 string type = one.Type;
                 string strAuthor = one.Author;
                 Debug.Assert(String.IsNullOrEmpty(strAuthor) == false, "");
-            REDO:
+                REDO:
 
                 if (type == "GCAT")
                 {
@@ -2481,7 +2489,19 @@ namespace dp2Circulation
                         string strMessage = "字符串 '" + strHanzi + "' 取汉语著者号码时出现意外状况: " + strLastError + "\r\n\r\n后面软件会自动尝试用卡特表方式为拼音字符串 '" + strPinyin + "' 取号。";
                         strAuthor = strPinyin;
                         type = "Cutter-Sanborn Three-Figure";
-                        MessageBox.Show(this.DetailForm, strMessage);
+                        // MessageBox.Show(this.DetailForm, strMessage);
+
+                        object o = Program.MainForm.ParamTable["gcat_warning"];
+                        bool bTemp = (o == null ? false : (bool)o);
+                        if (bTemp == false)
+                        {
+                            MessageDialog.Show(this.DetailForm,
+                                "汉语著者号码缺字",
+                                strMessage,
+                                "下次不再出现此对话框",
+                                ref bTemp);
+                            Program.MainForm.ParamTable["gcat_warning"] = bTemp;
+                        }
 
                         // 尝试把信息发给 dp2003.com
                         Program.MainForm.ReportError("dp2circulation 创建索取号", "(安静汇报)" + strMessage);
@@ -2562,8 +2582,8 @@ namespace dp2Circulation
                     goto ERROR1;
                 }
             }
-        //return 0;
-        ERROR1:
+            //return 0;
+            ERROR1:
             return -1;
         }
 
@@ -2786,7 +2806,7 @@ namespace dp2Circulation
                     strError = "MARC记录中 700/710/720/701/711/702/712/200 中均未发现包含汉字的 $a 子字段内容，无法获得著者字符串";
                     fLevel = 0;
                     return 0;
-                FOUND:
+                    FOUND:
                     Debug.Assert(results.Count > 0, "");
                     strAuthor = results[0];
                 }
@@ -2879,7 +2899,7 @@ namespace dp2Circulation
                     strError = "MARC记录中 700/710/720/701/711/702/712/200 中均未发现不含汉字的 $a 子字段内容，无法获得西文著者字符串";
                     fLevel = 0;
                     return 0;
-                FOUND:
+                    FOUND:
                     Debug.Assert(results.Count > 0, "");
                     strAuthor = results[0];
                 }
@@ -3707,6 +3727,13 @@ chi	中文	如果是中文，则为空。
             return 1;
         }
 #endif
+        // 去掉索取号中的回车换行和其他禁止出现的特殊字符
+        public static string RemoveSpecialChars(string strText)
+        {
+            if (string.IsNullOrEmpty(strText))
+                return strText;
+            return strText.Replace("\r", "").Replace("\n", "");
+        }
 
         // 创建一个索取号
         // return:
@@ -4070,8 +4097,9 @@ chi	中文	如果是中文，则为空。
                 Debug.Assert(nRet == 1, "");
 
                 // 先设置已经获得的索取类号部分
-                func_setText((strHeadLine != null ? strHeadLine + "/" : "")
-                        + strClass);
+                func_setText(RemoveSpecialChars(
+                    (strHeadLine != null ? strHeadLine + "/" : "") + strClass)
+                    );
 
 #if NO
                 // 先设置已经获得的索取类号部分
@@ -4194,10 +4222,12 @@ chi	中文	如果是中文，则为空。
                 }
 
                 // 最后设置完整的索取类号
-                func_setText((strHeadLine != null ? strHeadLine + "/" : "")
+                func_setText(RemoveSpecialChars(
+                    ((strHeadLine != null ? strHeadLine + "/" : "")
                         + strClass +
                         (string.IsNullOrEmpty(strQufenhao) == false ?
-                        "/" + strQufenhao : ""));
+                        "/" + strQufenhao : "")
+                        )));
 
 #if NO
                 // 最后设置完整的索取类号
@@ -4259,7 +4289,7 @@ chi	中文	如果是中文，则为空。
             }
 
             return 1;
-        ERROR1:
+            ERROR1:
             e.ErrorInfo = strError;
             return -1;
         }
@@ -4344,7 +4374,7 @@ chi	中文	如果是中文，则为空。
                 goto ERROR1;
             }
             return;
-        ERROR1:
+            ERROR1:
             e.ErrorInfo = strError;
             if (e.ShowErrorBox == true)
             {
@@ -4359,6 +4389,7 @@ chi	中文	如果是中文，则为空。
             }
         }
 
+#if OLD_CODE
         // GCAT通道登录
         internal void gcat_channel_BeforeLogin(object sender,
             DigitalPlatform.GcatClient.BeforeLoginEventArgs e)
@@ -4412,6 +4443,7 @@ chi	中文	如果是中文，则为空。
             Program.MainForm.ParamTable["author_number_account_username"] = strUserName;
             Program.MainForm.ParamTable["author_number_account_password"] = strPassword;
         }
+#endif
 
         /// <summary>
         /// 通过资源 ID 找到对应的 856 字段
@@ -4523,7 +4555,7 @@ chi	中文	如果是中文，则为空。
             Field856Dialog dlg = new Field856Dialog();
             GuiUtil.SetControlFont(dlg, Program.MainForm.DefaultFont, false);
             dlg.RightsCfgFileName = Path.Combine(Program.MainForm.UserDir, "objectrights.xml");
-
+            dlg.MarcSyntax = DetailForm.MarcSyntax;
             dlg.GetResInfo -= new GetResInfoEventHandler(dlg_GetResInfo);
             dlg.GetResInfo += new GetResInfoEventHandler(dlg_GetResInfo);
 
@@ -4535,17 +4567,20 @@ chi	中文	如果是中文，则为空。
             else
             {
                 dlg.Text = "创建新的856字段";
-                dlg.Value = "72";   // 缺省值
+                if (DetailForm.MarcSyntax == "unimarc")
+                    dlg.Value = "7 ";
+                else
+                    dlg.Value = "72";   // 缺省值
 
                 if (String.IsNullOrEmpty(strID) == false)
                 {
-                    dlg.Value += SUBFLD + LinkSubfieldName + strID + SUBFLD + "2dp2res";
+                    dlg.Value += SUBFLD + LinkSubfieldName + strID + SUBFLD + dlg.GetAccessMethodSubfieldName() + "dp2res";
                     dlg.AutoFollowIdSet = true; // 连带填充其它几个子字段
                     dlg.MessageText = "尚不存在和对象ID '" + strID + "' 关联的856字段，现在请创建...";
                 }
             }
 
-        REDO_INPUT:
+            REDO_INPUT:
             Program.MainForm.AppInfo.LinkFormState(dlg, "ctrl_a_field856dialog_state");
             dlg.ShowDialog(this.DetailForm);
             Program.MainForm.AppInfo.UnlinkFormState(dlg);
@@ -4704,7 +4739,7 @@ chi	中文	如果是中文，则为空。
 #endif
             this.DetailForm.MarcEditor.EnsureVisible();
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this.DetailForm, strError);
         }
     }

@@ -4102,6 +4102,14 @@ out strError);
 
             List<string> errors = new List<string>();
 
+            // 2018/8/16
+            string strPublishTime = DomUtil.GetElementText(dom.DocumentElement, "publishTime");
+            if (string.IsNullOrEmpty(strPublishTime))
+            {
+                strError = "出版日期字段为空";
+                errors.Add(strError);
+            }
+
             List<string> refids = new List<string>();   // 内嵌订购记录的 refid
 
             XmlNodeList nodes = dom.DocumentElement.SelectNodes("orderInfo/*");
@@ -4217,6 +4225,7 @@ out strError);
                 strError = StringUtil.MakePathList(errors, "; ");
                 return -1;
             }
+
             return 0;
         }
 
@@ -4321,7 +4330,7 @@ out strError);
             string strNewValue = "";
 
             // 分离 "old[new]" 内的两个值
-            OrderDesignControl.ParseOldNewValue(strCopy,
+            dp2StringUtil.ParseOldNewValue(strCopy,
                 out strOldValue,
                 out strNewValue);
             if ((string.IsNullOrEmpty(strOldValue) == true || strOldValue == "0")
@@ -4362,7 +4371,7 @@ out strError);
             string strNewValue = "";
 
             // 分离 "old[new]" 内的两个值
-            OrderDesignControl.ParseOldNewValue(strValue,
+            dp2StringUtil.ParseOldNewValue(strValue,
                 out strOldValue,
                 out strNewValue);
 
@@ -6144,14 +6153,21 @@ dlg.UiState);
                 return;
 
             int nRet = GetLocationList(
-out List<string> location_list,
+out List<string> location_list_param,
 out strError);
             if (nRet == -1)
             {
                 strError = "获得馆藏地配置参数时出错: " + strError;
                 goto ERROR1;
             }
-            location_list = Order.DistributeExcelFile.FilterLocationList(location_list, dlg.LibraryCode);
+            var location_list = Order.DistributeExcelFile.FilterLocationList(location_list_param, dlg.LibraryCode);
+            if (location_list.Count == 0)
+            {
+                strError = "当前用户能管辖的馆藏地 '"
+                    + StringUtil.MakePathList(location_list_param)
+                    + "' 和您选择的馆藏地过滤 '" + dlg.LibraryCode + "' 没有任何共同部分";
+                goto ERROR1;
+            }
 
             bool bLaunchExcel = true;
 
@@ -6167,19 +6183,18 @@ out strError);
                 goto ERROR1;
             }
 
-            IXLWorksheet sheet = null;
-            sheet = doc.Worksheets.Add("订购去向分配表");
-            // sheet.Protect();
-
             List<int> column_max_chars = new List<int>();   // 每个列的最大字符数            
             int nLineNumber = 0;    // 序号            
-            // int nRowIndex = 2;  // 跟踪行号            
-            bool bDone = false; // 是否成功走完全部流程
+            // bool bDone = false; // 是否成功走完全部流程
 
             int nOrderCount = 0;    // 导出订购记录计数
 
             try
             {
+                IXLWorksheet sheet = null;
+                sheet = doc.Worksheets.Add("订购去向分配表");
+                // sheet.Protect();
+
                 // 准备书目列标题
                 Order.BiblioColumnOption biblio_column_option = new Order.BiblioColumnOption(Program.MainForm.UserDir,
     "");
@@ -6360,9 +6375,9 @@ out strError);
         ref nLineNumber,
         strTableXml,
         "", // strStyle,
-        //biblio_title_list,
-        //nRowIndex,
-        //order_title_list,
+            //biblio_title_list,
+            //nRowIndex,
+            //order_title_list,
         strOrderRecPath,
                                         (biblio_recpath, order_recpath) =>
                                         {
@@ -6390,7 +6405,13 @@ out strError);
 
                 Order.DistributeExcelFile.AdjectColumnWidth(sheet, column_max_chars, 20);
 
-                bDone = true;
+                // bDone = true;
+
+                if (doc != null)
+                {
+                    doc.SaveAs(dlg.OutputFileName);
+                    doc.Dispose();
+                }
             }
             catch (Exception ex)
             {
@@ -6404,25 +6425,17 @@ out strError);
 
                 this.ClearMessage();
 
-                if (bDone)
+            }
+
+            if (bLaunchExcel)
+            {
+                try
                 {
-                    if (doc != null)
-                    {
-                        doc.SaveAs(dlg.OutputFileName);
-                        doc.Dispose();
-                    }
+                    System.Diagnostics.Process.Start(dlg.OutputFileName);
+                }
+                catch
+                {
 
-                    if (bLaunchExcel)
-                    {
-                        try
-                        {
-                            System.Diagnostics.Process.Start(dlg.OutputFileName);
-                        }
-                        catch
-                        {
-
-                        }
-                    }
                 }
             }
 
@@ -9329,13 +9342,14 @@ dlg.UiState);
             }
 
             Hashtable rule_name_table = null;
-            bool bTableExists = false;
+            bool bTableExists = false;  // 编目规则对照表是否存在
             // 将馆藏地点名和编目规则名的对照表装入内存
             // return:
             //      -1  出错
             //      0   文件不存在
             //      1   成功
-            nRet = LoadRuleNameTable(PathUtil.MergePath(Program.MainForm.DataDir, "cataloging_rules.xml"),
+            nRet = LoadRuleNameTable(PathUtil.MergePath(Program.MainForm.UserDir, // Program.MainForm.DataDir,
+                "cataloging_rules.xml"),
                 out rule_name_table,
                 out strError);
             if (nRet == -1)
@@ -9519,6 +9533,7 @@ dlg.UiState);
                 if (nRet == -1)
                     goto ERROR1;
 
+                bool bRuled = false;    // 是否被编目规则过滤过
                 string strMARC = "";
                 string strMarcSyntax = "";
                 MarcRecord record = null;
@@ -9537,6 +9552,7 @@ dlg.UiState);
                     {
 
                         strMARC = "";
+                        bRuled = false;
                         strMarcSyntax = "";
                         // 将XML格式转换为MARC格式
                         // 自动从数据记录中获得MARC语法
@@ -9556,15 +9572,22 @@ dlg.UiState);
 
                         record = new MarcRecord(strMARC);
 
-                        // 按照编目规则过滤
-                        // 获得一个特定风格的 MARC 记录
-                        // parameters:
-                        //      strStyle    要匹配的style值。如果为null，表示任何$*值都匹配，实际上效果是去除$*并返回全部字段内容
-                        // return:
-                        //      0   没有实质性修改
-                        //      1   有实质性修改
-                        nRet = MarcUtil.GetMappedRecord(ref strMARC,
-                            strCatalogingRule);
+                        if (bTableExists == false)
+                        {
+                            // 按照编目规则过滤
+                            // 获得一个特定风格的 MARC 记录
+                            // parameters:
+                            //      strStyle    要匹配的style值。如果为null，表示任何$*值都匹配，实际上效果是去除$*并返回全部字段内容
+                            // return:
+                            //      0   没有实质性修改
+                            //      1   有实质性修改
+                            nRet = MarcUtil.GetMappedRecord(ref strMARC,
+                                strCatalogingRule);
+                            if (nRet == 1)
+                                record = new MarcRecord(strMARC);
+                            bRuled = true;
+                        }
+
                         if (dlg.RemoveField998 == true)
                         {
                             record.select("field[@name='998']").detach();
@@ -9589,6 +9612,9 @@ dlg.UiState);
                         string strLocation = DomUtil.GetElementText(item_dom.DocumentElement, "location");
                         strLocation = StringUtil.GetPureLocation(strLocation);
 
+                        // TODO: 如果发现编目规则不同(要汇总到底有几个规则)，那要把每个不同编目规则变换出来的 MARC 书目记录都保存，最后一并输出
+                        // 原本输出一条的书目记录，因为编目规则不同而输出多条，和自动合并创建 905 等功能矛盾了，要思考一下如何做
+                        // 或者用同一书目记录下第一个遇到的规则作为最后的规则
                         if (bTableExists == true)
                         {
                             strCatalogingRule = "";
@@ -9621,6 +9647,21 @@ dlg.UiState);
 
                                     rule_name_table[strLocation] = strCatalogingRule; // 储存到内存，后面就不再作相同的询问了
                                 }
+
+                                if (bRuled == false)
+                                {
+                                    strMARC = record.Content;
+                                    // 从一个 origin marc 变换为最终需要导出的 marc
+                                    // return:
+                                    //      0   没有实质性修改
+                                    //      1   有实质性修改
+                                    nRet = MarcUtil.GetMappedRecord(ref strMARC,
+        strCatalogingRule);
+                                    if (nRet == 1)
+                                        record = new MarcRecord(strMARC);
+
+                                    bRuled = true;
+                                }
                             }
                         }
 
@@ -9643,7 +9684,6 @@ dlg.UiState);
                             record,
                             sub_items);
 
-                        byte[] baTarget = null;
                         // 将MARC机内格式转换为ISO2709格式
                         // parameters:
                         //      strSourceMARC   [in]机内格式MARC记录。
@@ -9657,7 +9697,7 @@ dlg.UiState);
                             record.Text,
                             strMarcSyntax,
                             targetEncoding,
-                            out baTarget,
+                            out byte[] baTarget,
                             out strError);
                         if (nRet == -1)
                             throw new Exception(strError);

@@ -1,10 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Drawing;
-using System.Linq;
-using System.Text;
 using System.Windows.Forms;
 using System.IO;
 using System.Diagnostics;
@@ -106,6 +101,12 @@ MessageBoxDefaultButton.Button1);
         {
             string strError = "";
 
+            if (this.comboBox_server_serverType.Text == "[暂时不使用任何服务器]")
+            {
+                this.textBox_server_dp2LibraryServerUrl.Text = "[None]";
+                goto END1;
+            }
+
             if (string.IsNullOrEmpty(this.textBox_server_dp2LibraryServerUrl.Text) == true)
             {
                 strError = "请输入 dp2library 服务器 URL 地址";
@@ -122,6 +123,7 @@ MessageBoxDefaultButton.Button1);
             if (nRet == -1)
                 goto ERROR1;
 
+            END1:
             Program.MainForm.AppInfo.SetString("config",
     "circulation_server_url",
     this.textBox_server_dp2LibraryServerUrl.Text);
@@ -163,7 +165,7 @@ MessageBoxDefaultButton.Button1);
             this.DialogResult = System.Windows.Forms.DialogResult.OK;
             this.Close();
             return;
-        ERROR1:
+            ERROR1:
             MessageBox.Show(this, strError);
         }
 
@@ -176,7 +178,7 @@ MessageBoxDefaultButton.Button1);
             if (string.Compare(this.textBox_server_dp2LibraryServerUrl.Text,
                 CirculationLoginDlg.dp2LibraryXEServerUrl, true) == 0)
             {
-                string strShortcutFilePath = PathUtil.GetShortcutFilePath("DigitalPlatform/dp2 V2/dp2Library XE");
+                string strShortcutFilePath = PathUtil.GetShortcutFilePath("DigitalPlatform/dp2 V3/dp2Library XE V3");
                 if (File.Exists(strShortcutFilePath) == false)
                 {
                     // 安装和启动
@@ -252,7 +254,7 @@ MessageBoxDefaultButton.Button1);
             messageBar.BackColor = SystemColors.Info;
             messageBar.ForeColor = SystemColors.InfoText;
             messageBar.Text = "dp2 内务";
-            messageBar.MessageText = "正在启动 dp2Library XE，请等待 ...";
+            messageBar.MessageText = "正在启动 dp2Library XE V3，请等待 ...";
             messageBar.StartPosition = FormStartPosition.CenterScreen;
             messageBar.Show(owner);
             messageBar.Update();
@@ -264,16 +266,16 @@ MessageBoxDefaultButton.Button1);
 
                 string strShortcutFilePath = "";
                 if (bLocal == true)
-                    strShortcutFilePath = PathUtil.GetShortcutFilePath("DigitalPlatform/dp2 V2/dp2Library XE");
+                    strShortcutFilePath = PathUtil.GetShortcutFilePath("DigitalPlatform/dp2 V3/dp2Library XE V3");
                 else
                 {
-                    strShortcutFilePath = "http://dp2003.com/dp2libraryxe/v1/dp2libraryxe.application";
+                    strShortcutFilePath = "http://dp2003.com/dp2libraryxe/v3/dp2libraryxe.application";
                     waitTime = new TimeSpan(0, 5, 0);  // 安装需要的等待时间更长
                 }
 
                 // TODO: detect if already started
                 using (EventWaitHandle eventWaitHandle = new EventWaitHandle(false, EventResetMode.ManualReset,
-                    "dp2libraryXE V1 library host started"))
+                    "dp2libraryXE V3 library host started"))
                 {
                     Application.DoEvents();
 
@@ -292,7 +294,7 @@ MessageBoxDefaultButton.Button1);
                         if (DateTime.Now - start > waitTime)
                         {
                             DialogResult result = MessageBox.Show(owner,
-    "dp2libraryXE 暂时没有响应。\r\n\r\n是否继续等待其响应?",
+    "dp2libraryXE V3 暂时没有响应。\r\n\r\n是否继续等待其响应?",
     strDialogTitle,
     MessageBoxButtons.YesNo,
     MessageBoxIcon.Question,
@@ -316,7 +318,7 @@ MessageBoxDefaultButton.Button1);
         {
             bool createdNew = true;
             // mutex name need contains windows account name. or us programes file path, hashed
-            using (Mutex mutex = new Mutex(true, "dp2libraryXE V1", out createdNew))
+            using (Mutex mutex = new Mutex(true, "dp2libraryXE V3", out createdNew))
             {
                 if (createdNew)
                 {
@@ -502,6 +504,10 @@ MessageBoxDefaultButton.Button1);
          * * */
         private void comboBox_server_serverType_SelectedIndexChanged(object sender, EventArgs e)
         {
+            this.textBox_server_userName.Enabled = true;
+            this.textBox_server_password.Enabled = true;
+            this.textBox_server_dp2LibraryServerUrl.Enabled = true;
+
             if (this.comboBox_server_serverType.Text == "单机版 (dp2Library XE)")
             {
                 this.textBox_server_dp2LibraryServerUrl.Text = "net.pipe://localhost/dp2library/XE";
@@ -525,6 +531,16 @@ MessageBoxDefaultButton.Button1);
 
                 this.textBox_server_userName.Text = "";
                 this.textBox_server_password.Text = "";
+            }
+            else if (this.comboBox_server_serverType.Text == "[暂时不使用任何服务器]")
+            {
+                this.textBox_server_dp2LibraryServerUrl.Text = "[None]";
+                this.textBox_server_dp2LibraryServerUrl.Enabled = false;
+
+                this.textBox_server_userName.Text = "";
+                this.textBox_server_userName.Enabled = false;
+                this.textBox_server_password.Text = "";
+                this.textBox_server_password.Enabled = false;
             }
             else
             {

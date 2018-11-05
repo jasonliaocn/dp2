@@ -6,6 +6,7 @@ using System.Xml;
 using DigitalPlatform.Marc;
 using DigitalPlatform.Script;
 using DigitalPlatform.Text;
+using static DigitalPlatform.Script.ScriptUtil;
 
 namespace DigitalPlatform.LibraryServer
 {
@@ -36,19 +37,24 @@ namespace DigitalPlatform.LibraryServer
             string strRecPath,
             string strMARC,
             string strStyle,
+            XmlElement maps_container,
             out List<NameValueLine> results,
             out string strError)
         {
             strError = "";
             results = new List<NameValueLine>();
 
+            if (strStyle == null)
+                strStyle = "";
+
             MarcRecord record = new MarcRecord(strMARC);
 
             if (record.ChildNodes.count == 0)
                 return 0;
 
-            if (strStyle == "*" || string.IsNullOrEmpty(strStyle))
-                strStyle = "areas,coverimageurl,titlepinyin,object,summary,subjects,classes";
+            if (StringUtil.IsInList("*", strStyle) // strStyle == "*" 
+                || string.IsNullOrEmpty(strStyle))
+                strStyle += ",areas,coverimageurl,titlepinyin,object,summary,subjects,classes";
 
             /*
 * content_form_area
@@ -421,9 +427,22 @@ namespace DigitalPlatform.LibraryServer
             // 数字资源
             if (StringUtil.IsInList("object", strStyle))
             {
-                string objectTable = ScriptUtil.BuildObjectXmlTable(strMARC);
+                
+                string objectTable = ScriptUtil.BuildObjectXmlTable(strMARC,
+                    StringUtil.IsInList("object_template", strStyle) ? BuildObjectHtmlTableStyle.Template : BuildObjectHtmlTableStyle.None,
+                    "unimarc",
+                    strRecPath,
+                    maps_container);
+                //if (string.IsNullOrEmpty(objectTable) == false)
+                //    results.Add(new NameValueLine("数字资源", objectTable, "object"));
+
+                // 2018/11/5
                 if (string.IsNullOrEmpty(objectTable) == false)
-                    results.Add(new NameValueLine("数字资源", objectTable, "object"));
+                {
+                    var line = new NameValueLine("数字资源", "", "object");
+                    line.Xml = objectTable;
+                    results.Add(line);
+                }
             }
 
             return 0;
@@ -435,7 +454,7 @@ namespace DigitalPlatform.LibraryServer
         static string BuildUnimarcFields(MarcNodeList fields,
             string strSubfieldNameList = null)
         {
-            StringBuilder text = new StringBuilder(4096);
+            StringBuilder text = new StringBuilder();
             int i = 0;
             foreach (MarcField field in fields)
             {
@@ -445,7 +464,7 @@ namespace DigitalPlatform.LibraryServer
                 MarcNodeList nodes = field.select("subfield");
                 if (nodes.count > 0)
                 {
-                    StringBuilder temp = new StringBuilder(4096);
+                    StringBuilder temp = new StringBuilder();
                     foreach (MarcSubfield subfield in nodes)
                     {
                         if (subfield.Name == "6")
@@ -1135,6 +1154,7 @@ namespace DigitalPlatform.LibraryServer
             string strRecPath,
             string strMARC,
             string strStyle,
+            XmlElement maps_container,
             out List<NameValueLine> results,
             out string strError)
         {
@@ -1514,7 +1534,11 @@ namespace DigitalPlatform.LibraryServer
             fields = record.select("field[@name='856' or @name='859']");
             if (fields.count > 0)
             {
-                string strXml = ScriptUtil.BuildObjectXmlTable(strMARC);
+                string strXml = ScriptUtil.BuildObjectXmlTable(strMARC,
+                    StringUtil.IsInList("object_template", strStyle) ? BuildObjectHtmlTableStyle.Template : BuildObjectHtmlTableStyle.None,
+                    "usmarc",
+                    strRecPath,
+                    maps_container);
                 if (string.IsNullOrEmpty(strXml) == false)
                 {
                     var line = new NameValueLine("Digital Resource", "", "object");
@@ -1557,7 +1581,7 @@ namespace DigitalPlatform.LibraryServer
         // 直接串联每个子字段的内容
         static string ConcatSubfields(MarcNodeList nodes)
         {
-            StringBuilder text = new StringBuilder(4096);
+            StringBuilder text = new StringBuilder();
             foreach (MarcNode node in nodes)
             {
                 if (node.Name == "6")
@@ -1574,14 +1598,14 @@ namespace DigitalPlatform.LibraryServer
         static string BuildFields(MarcNodeList fields,
             string strSubfieldNameList = null)
         {
-            StringBuilder text = new StringBuilder(4096);
+            StringBuilder text = new StringBuilder();
             int i = 0;
             foreach (MarcNode field in fields)
             {
                 MarcNodeList nodes = field.select("subfield");
                 if (nodes.count > 0)
                 {
-                    StringBuilder temp = new StringBuilder(4096);
+                    StringBuilder temp = new StringBuilder();
                     foreach (MarcNode subfield in nodes)
                     {
                         if (subfield.Name == "6")
@@ -1611,7 +1635,7 @@ namespace DigitalPlatform.LibraryServer
         // 组合构造若干个主题字段内容
         static string BuildSubjects(MarcNodeList fields)
         {
-            StringBuilder text = new StringBuilder(4096);
+            StringBuilder text = new StringBuilder();
             int i = 0;
             foreach (MarcNode field in fields)
             {
@@ -1622,7 +1646,7 @@ namespace DigitalPlatform.LibraryServer
                         text.Append(CRLF);
 
                     bool bPrevContent = false;  // 前一个子字段是除了 x y z 以外的子字段
-                    StringBuilder temp = new StringBuilder(4096);
+                    StringBuilder temp = new StringBuilder();
                     foreach (MarcNode subfield in nodes)
                     {
                         if (subfield.Name == "6")
@@ -1659,7 +1683,7 @@ namespace DigitalPlatform.LibraryServer
         // 组合构造若干个856字段内容
         static string BuildLinks(MarcNodeList fields)
         {
-            StringBuilder text = new StringBuilder(4096);
+            StringBuilder text = new StringBuilder();
             int i = 0;
             foreach (MarcNode field in fields)
             {
@@ -1690,7 +1714,7 @@ namespace DigitalPlatform.LibraryServer
                     if (i > 0)
                         text.Append(CRLF);
 
-                    StringBuilder temp = new StringBuilder(4096);
+                    StringBuilder temp = new StringBuilder();
 
                     if (string.IsNullOrEmpty(t3) == false)
                         temp.Append(t3 + ": <|");

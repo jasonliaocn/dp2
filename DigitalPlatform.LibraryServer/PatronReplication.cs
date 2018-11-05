@@ -151,6 +151,7 @@ namespace DigitalPlatform.LibraryServer
             if (this.App.PauseBatchTask == true)
                 return;
 
+#if NO
             if (DateTime.Now > new DateTime(2015, 12, 31) // 2016/1/1 以后可删除此语句
                 && StringUtil.IsInList("patronReplication", this.App.Function) == false)
             {
@@ -159,8 +160,8 @@ namespace DigitalPlatform.LibraryServer
                 // this.App.WriteErrorLog(strErrorText);
                 return;
             }
+#endif
 
-            string strError = "";
             int nRet = 0;
 
             BatchTaskStartInfo startinfo = this.StartInfo;
@@ -172,7 +173,7 @@ namespace DigitalPlatform.LibraryServer
             //      -1  出错
             //      0   尚未配置<patronReplication>参数
             //      1   成功
-            nRet = GetConfigParameters(out strError);
+            nRet = GetConfigParameters(out string strError);
             if (nRet == -1)
             {
                 string strErrorText = "获取配置参数时出错: " + strError;
@@ -432,9 +433,9 @@ namespace DigitalPlatform.LibraryServer
                 // current_ids 和 ids 进行交叉运算
                 this.AppendResultText("排序归并ID\r\n");
                 current_ids.Sort();
-                StringUtil.RemoveDup(ref current_ids);
+                StringUtil.RemoveDup(ref current_ids, true);
                 ids.Sort();
-                StringUtil.RemoveDup(ref ids);
+                StringUtil.RemoveDup(ref ids, true);
 
                 List<string> targetLeft = new List<string>();
                 List<string> targetMiddle = null;
@@ -528,10 +529,12 @@ namespace DigitalPlatform.LibraryServer
             }
 
             return;
-        ERROR1:
+#if NO
+            ERROR1:
             AppendResultText("PatronReplication thread error : " + strError + "\r\n");
             this.App.WriteErrorLog("PatronReplication thread error : " + strError + "\r\n");
             return;
+#endif
         }
 
         IChannel m_cardCenterChannel = null;    // new IpcClientChannel();
@@ -737,7 +740,7 @@ patronDbName="读者库"
 idElementName="barcode"
 />
 */
-            XmlNode node = this.App.LibraryCfgDom.DocumentElement.SelectSingleNode("//patronReplication");
+            XmlNode node = this.App.LibraryCfgDom.DocumentElement.SelectSingleNode("patronReplication");  // "//patronReplication" 2018/9/5 修改 bug
             if (node == null)
             {
                 strError = "尚未配置<patronReplication>参数";

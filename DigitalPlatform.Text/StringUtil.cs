@@ -7,6 +7,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Web;
 using System.Xml;
 
@@ -15,6 +16,99 @@ namespace DigitalPlatform.Text
     public class StringUtil
     {
         public static string SpecialChars = "！·＃￥％……—＊（）——＋－＝［］《》＜＞，。？／＼｜｛｝“”‘’•";
+
+        public delegate void Delegate_clipboardFunc();
+
+        public static void RunClipboard(Delegate_clipboardFunc func)
+        {
+            try
+            {
+                func();
+                return;
+            }
+            catch
+            {
+
+            }
+
+            // https://stackoverflow.com/questions/38421985/why-clipboard-setdataobject-doesnt-copy-object-to-the-clipboard-in-c-sharp
+            Exception threadEx = null;
+            Thread staThread = new Thread(
+                delegate ()
+                {
+                    try
+                    {
+                        func();
+                    }
+                    catch (Exception ex)
+                    {
+                        threadEx = ex;
+                    }
+                });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.Start();
+            staThread.Join();
+            if (threadEx != null)
+                throw threadEx;
+        }
+
+        /// <summary>
+        /// 检测一个列表字符串是否包含一个具体的值
+        /// </summary>
+        /// <param name="strList">列表字符串。用逗号分隔多个子串</param>
+        /// <param name="strOne">要检测的一个具体的值</param>
+        /// <returns>false 没有包含; true 包含</returns>
+        public static bool Contains(string strList, string strOne, char delimeter = ',')
+        {
+            if (string.IsNullOrEmpty(strList) == true)
+                return false;
+            string[] list = strList.Split(new char[] { delimeter }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string s in list)
+            {
+                if (strOne == s)
+                    return true;
+            }
+
+            return false;
+        }
+
+        // 查找符合特定前缀的参数。增强版本，能处理 :username, operation:username, 这样的形态
+        // parameters:
+        //      strPrefix 前缀。例如 "getreaderinfo"
+        //      strDelimiter    前缀和后面参数的分隔符号。例如 ":"
+        // return:
+        //      null    没有找到前缀
+        //      ""      找到了前缀，并且值部分为空
+        //      其他     返回值部分
+        public static string GetParameterByPrefixEnvironment(string strList,
+            string strPrefix,
+            string strDelimiter = ":",
+            char segChar = ',')
+        {
+            if (string.IsNullOrEmpty(strList) == true)
+                return null;
+            string environment = "";    // 当前环境值
+            string[] list = strList.Split(new char[] { segChar }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string s in list)
+            {
+                if (s.StartsWith(strDelimiter) == true)
+                {
+                    environment = s.Substring(strDelimiter.Length);
+                    continue;
+                }
+                if (s.StartsWith(strPrefix + strDelimiter) == true)
+                {
+                    string value = s.Substring(strPrefix.Length + strDelimiter.Length);
+                    if (string.IsNullOrEmpty(value) == false)
+                        return value;
+                    return environment;
+                }
+                if (s == strPrefix)
+                    return environment;
+            }
+
+            return null;
+        }
 
         // 比较两个一般价格字符串。形态为 "CNY12.00+USD20.00"
         public static int ComparePrice(string s1, string s2)
@@ -2233,8 +2327,19 @@ string strTimestamp)
             }
         }
 
+        // parameters:
+        //      bSorted 是否在调用前就排过序?
+        public static void RemoveDup(ref List<string> list, bool bSorted)
+        {
+            if (bSorted == false)
+                list.Sort();
+
+            _removeDup(ref list);
+        }
+
         // 把一个字符串数组去重。调用前，应当已经排序
-        public static void RemoveDup(ref List<string> list)
+        // 警告：此函数极易在忘记先排序的情况下调用
+        public static void _removeDup(ref List<string> list)
         {
             for (int i = 0; i < list.Count; i++)
             {

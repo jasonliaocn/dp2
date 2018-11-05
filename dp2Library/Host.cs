@@ -2,10 +2,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Diagnostics;
-using System.Linq;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading;
@@ -22,6 +19,7 @@ using System.IdentityModel.Selectors;
 using System.Runtime.Remoting.Channels.Ipc;
 using System.Runtime.Remoting.Channels;
 using System.Runtime.Remoting;
+using System.Runtime.Serialization.Formatters;
 
 using Microsoft.Win32;
 
@@ -29,7 +27,7 @@ using DigitalPlatform;
 using DigitalPlatform.LibraryServer;
 using DigitalPlatform.IO;
 using DigitalPlatform.Text;
-using System.Runtime.Serialization.Formatters;
+using System.Threading.Tasks;
 
 namespace dp2Library
 {
@@ -228,6 +226,7 @@ namespace dp2Library
             return null;
         }
 
+#if NO
         void CloseHosts()
         {
             foreach (ServiceHost host in this.m_hosts)
@@ -244,6 +243,90 @@ namespace dp2Library
 
             this.m_hosts.Clear();
         }
+#endif
+
+#if NO
+        void CloseHosts()
+        {
+            List<HostInfo> infos = new List<HostInfo>();
+            foreach (ServiceHost host in this.m_hosts)
+            {
+                HostInfo info = host.Extensions.Find<HostInfo>();
+                if (info != null)
+                {
+                    infos.Add(info);
+                    host.Extensions.Remove(info);
+                }
+
+                host.Close();
+            }
+
+            this.m_hosts.Clear();
+
+            // 用多线程集中 Dispose()
+            if (infos.Count > 0)
+            {
+                List<Task> tasks = new List<Task>();
+                foreach (HostInfo info in infos)
+                {
+                    Task.Run(() => info.Dispose());
+                }
+                Task.WaitAll(tasks.ToArray());
+            }
+        }
+#endif
+
+        static string GetTime()
+        {
+            return DateTime.Now.ToLongTimeString() + " ";
+        }
+
+        void CloseHosts()
+        {
+            StringBuilder debugInfo = new StringBuilder();
+
+            debugInfo.AppendFormat("{0}开始停止 {1} 个 host\r\n", GetTime(), this.m_hosts.Count);
+
+            List<Task> tasks = new List<Task>();
+            List<HostInfo> infos = new List<HostInfo>();
+            {
+                foreach (ServiceHost host in this.m_hosts)
+                {
+                    HostInfo info = host.Extensions.Find<HostInfo>();
+                    if (info != null)
+                    {
+                        infos.Add(info);
+                        host.Extensions.Remove(info);
+                    }
+                    tasks.Add(Task.Factory.FromAsync(host.BeginClose, host.EndClose, null));
+                }
+
+                this.m_hosts.Clear();
+            }
+
+            // 用多线程集中 Dispose()
+            if (infos.Count > 0)
+            {
+                foreach (HostInfo info in infos)
+                {
+                    Task.Run(() => info.Dispose());
+                }
+            }
+
+            // Task.WaitAll(tasks.ToArray());
+
+            int timeout = 10000;
+            while (!Task.WaitAll(tasks.ToArray(), timeout))
+            {
+                RequestAdditionalTime(timeout);
+            }
+
+            debugInfo.AppendFormat("{0}完成停止 hosts\r\n", GetTime());
+
+            this.Log.WriteEntry("dp2Library CloseHosts() debugInfo: \r\n" + debugInfo.ToString(),
+EventLogEntryType.Information);
+        }
+
 
         // 关闭一个指定的 host
         // return:
@@ -323,9 +406,16 @@ namespace dp2Library
         {
             string strExtParams = SerialCodeForm.GetExtParams(strSerialCode);
             Hashtable table = StringUtil.ParseParameters(strExtParams);
-            return (string)table["function"];
+            return CanonicalizeFunction((string)table["function"]);
         }
 
+        // 将 function 参数值中的竖线替换为逗号
+        static string CanonicalizeFunction(string text)
+        {
+            if (text == null)
+                return "";
+            return text.Replace("|", ",");
+        }
         // 检查序列号中是否具备某个功能
         static bool CheckFunction(string strSerialCode, string strFunction)
         {
@@ -631,6 +721,8 @@ EventLogEntryType.Error);
                     host.Description.Behaviors.Add(behavior);
                 }
 
+                // 直接用默认值即可
+#if NO
                 if (host.Description.Behaviors.Find<ServiceThrottlingBehavior>() == null)
                 {
                     ServiceThrottlingBehavior behavior = new ServiceThrottlingBehavior();
@@ -639,6 +731,7 @@ EventLogEntryType.Error);
                     behavior.MaxConcurrentSessions = 1000;
                     host.Description.Behaviors.Add(behavior);
                 }
+#endif
 
                 // IncludeExceptionDetailInFaults
                 ServiceDebugBehavior debug_behavior = host.Description.Behaviors.Find<ServiceDebugBehavior>();
@@ -1378,7 +1471,7 @@ EventLogEntryType.Error);
             Console.WriteLine("共删除 " + nCount.ToString() + " 个临时文件");
         }
 
-        #region Windows Service 控制命令设施
+#region Windows Service 控制命令设施
 
         IpcServerChannel m_serverChannel = null;
 
@@ -1420,7 +1513,7 @@ EventLogEntryType.Error);
             }
         }
 
-        #endregion
+#endregion
     }
 
     public class MyValidator : UserNamePasswordValidator

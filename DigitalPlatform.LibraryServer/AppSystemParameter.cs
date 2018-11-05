@@ -153,7 +153,7 @@ namespace DigitalPlatform.LibraryServer
                             filenames.Add(MakeFileName(fi));
                         }
 
-                        StringBuilder text = new StringBuilder(4096);
+                        StringBuilder text = new StringBuilder();
                         string strHead = strDirectory;
                         foreach (string strFilename in filenames)
                         {
@@ -169,7 +169,7 @@ namespace DigitalPlatform.LibraryServer
                         strValue = text.ToString();
                         goto END1;
                     }
-                    catch (DirectoryNotFoundException ex)
+                    catch (DirectoryNotFoundException /*ex*/)
                     {
                         strError = "目录 '" + strName + "' 不存在";
                         goto ERROR1;
@@ -218,7 +218,7 @@ namespace DigitalPlatform.LibraryServer
                             filenames.AddRange(GetFilenames(sub.FullName, true, true));
                         }
 
-                        StringBuilder text = new StringBuilder(4096);
+                        StringBuilder text = new StringBuilder();
                         string strHead = Path.Combine(this.DataDir, "cfgs/");
                         foreach (string strFilename in filenames)
                         {
@@ -279,7 +279,7 @@ namespace DigitalPlatform.LibraryServer
                         strError = "get channel error";
                         goto ERROR1;
                     }
-                    StringBuilder text = new StringBuilder(4096);
+                    StringBuilder text = new StringBuilder();
                     foreach (string filename in filenames)
                     {
                         string strXml = "";
@@ -345,6 +345,14 @@ namespace DigitalPlatform.LibraryServer
 
                 if (strCategory == "system")
                 {
+                    // 2018/7/17
+                    // 获得 dp2library 失效期
+                    if (strName == "expire")
+                    {
+                        strValue = _expire.ToLongDateString();
+                        goto END1;
+                    }
+
                     // 2018/6/19
                     // 获得系统挂起状态
                     if (strName == "hangup")

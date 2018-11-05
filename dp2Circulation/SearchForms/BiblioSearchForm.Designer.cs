@@ -35,7 +35,7 @@
             this.label2 = new System.Windows.Forms.Label();
             this.textBox_queryWord = new System.Windows.Forms.TextBox();
             this.label1 = new System.Windows.Forms.Label();
-            this.label3 = new System.Windows.Forms.Label();
+            this.label_biblioDbName = new System.Windows.Forms.Label();
             this.contextMenuStrip_biblioDb = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.MenuItem_viewBiblioDbProperty = new System.Windows.Forms.ToolStripMenuItem();
             this.tableLayoutPanel_query = new System.Windows.Forms.TableLayoutPanel();
@@ -74,6 +74,7 @@
             this.listView_records = new DigitalPlatform.GUI.ListViewNF();
             this.columnHeader_path = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.columnHeader_1 = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
+            this.ToolStripMenuItem_filterRecords = new System.Windows.Forms.ToolStripMenuItem();
             this.contextMenuStrip_biblioDb.SuspendLayout();
             this.tableLayoutPanel_query.SuspendLayout();
             this.toolStrip_search.SuspendLayout();
@@ -105,9 +106,9 @@
             this.textBox_queryWord.Dock = System.Windows.Forms.DockStyle.Fill;
             this.textBox_queryWord.ImeMode = System.Windows.Forms.ImeMode.NoControl;
             this.textBox_queryWord.Location = new System.Drawing.Point(134, 6);
-            this.textBox_queryWord.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
+            this.textBox_queryWord.Margin = new System.Windows.Forms.Padding(6);
             this.textBox_queryWord.Name = "textBox_queryWord";
-            this.textBox_queryWord.Size = new System.Drawing.Size(306, 28);
+            this.textBox_queryWord.Size = new System.Drawing.Size(254, 28);
             this.textBox_queryWord.TabIndex = 1;
             this.textBox_queryWord.TextChanged += new System.EventHandler(this.textBox_queryWord_TextChanged);
             this.textBox_queryWord.Enter += new System.EventHandler(this.textBox_queryWord_Enter);
@@ -126,18 +127,18 @@
             this.label1.Text = "检索词(&W):";
             this.label1.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
-            // label3
+            // label_biblioDbName
             // 
-            this.label3.AutoSize = true;
-            this.label3.ContextMenuStrip = this.contextMenuStrip_biblioDb;
-            this.label3.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.label3.Location = new System.Drawing.Point(4, 40);
-            this.label3.Margin = new System.Windows.Forms.Padding(4, 0, 4, 0);
-            this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(120, 37);
-            this.label3.TabIndex = 3;
-            this.label3.Text = "书目库(&D):";
-            this.label3.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            this.label_biblioDbName.AutoSize = true;
+            this.label_biblioDbName.ContextMenuStrip = this.contextMenuStrip_biblioDb;
+            this.label_biblioDbName.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.label_biblioDbName.Location = new System.Drawing.Point(4, 40);
+            this.label_biblioDbName.Margin = new System.Windows.Forms.Padding(4, 0, 4, 0);
+            this.label_biblioDbName.Name = "label_biblioDbName";
+            this.label_biblioDbName.Size = new System.Drawing.Size(120, 37);
+            this.label_biblioDbName.TabIndex = 3;
+            this.label_biblioDbName.Text = "书目库(&D):";
+            this.label_biblioDbName.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
             // contextMenuStrip_biblioDb
             // 
@@ -164,7 +165,7 @@
             this.tableLayoutPanel_query.Controls.Add(this.label4, 0, 4);
             this.tableLayoutPanel_query.Controls.Add(this.label2, 0, 2);
             this.tableLayoutPanel_query.Controls.Add(this.textBox_queryWord, 1, 0);
-            this.tableLayoutPanel_query.Controls.Add(this.label3, 0, 1);
+            this.tableLayoutPanel_query.Controls.Add(this.label_biblioDbName, 0, 1);
             this.tableLayoutPanel_query.Controls.Add(this.label1, 0, 0);
             this.tableLayoutPanel_query.Controls.Add(this.comboBox_from, 1, 2);
             this.tableLayoutPanel_query.Controls.Add(this.label_matchStyle, 0, 3);
@@ -209,9 +210,9 @@
             this.comboBox_from.FormattingEnabled = true;
             this.comboBox_from.IntegralHeight = false;
             this.comboBox_from.Location = new System.Drawing.Point(134, 83);
-            this.comboBox_from.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
+            this.comboBox_from.Margin = new System.Windows.Forms.Padding(6);
             this.comboBox_from.Name = "comboBox_from";
-            this.comboBox_from.Size = new System.Drawing.Size(306, 29);
+            this.comboBox_from.Size = new System.Drawing.Size(254, 29);
             this.comboBox_from.TabIndex = 6;
             this.comboBox_from.SizeChanged += new System.EventHandler(this.comboBox_from_SizeChanged);
             // 
@@ -239,9 +240,9 @@
             "精确一致",
             "空值"});
             this.comboBox_matchStyle.Location = new System.Drawing.Point(134, 124);
-            this.comboBox_matchStyle.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
+            this.comboBox_matchStyle.Margin = new System.Windows.Forms.Padding(6);
             this.comboBox_matchStyle.Name = "comboBox_matchStyle";
-            this.comboBox_matchStyle.Size = new System.Drawing.Size(306, 26);
+            this.comboBox_matchStyle.Size = new System.Drawing.Size(254, 26);
             this.comboBox_matchStyle.TabIndex = 8;
             this.comboBox_matchStyle.Text = "前方一致";
             this.comboBox_matchStyle.SizeChanged += new System.EventHandler(this.comboBox_matchStyle_SizeChanged);
@@ -256,7 +257,7 @@
             this.checkedComboBox_biblioDbNames.Margin = new System.Windows.Forms.Padding(4);
             this.checkedComboBox_biblioDbNames.Name = "checkedComboBox_biblioDbNames";
             this.checkedComboBox_biblioDbNames.Padding = new System.Windows.Forms.Padding(4);
-            this.checkedComboBox_biblioDbNames.Size = new System.Drawing.Size(310, 29);
+            this.checkedComboBox_biblioDbNames.Size = new System.Drawing.Size(258, 29);
             this.checkedComboBox_biblioDbNames.TabIndex = 9;
             this.checkedComboBox_biblioDbNames.DropDown += new System.EventHandler(this.checkedComboBox_biblioDbNames_DropDown);
             this.checkedComboBox_biblioDbNames.ItemChecked += new System.Windows.Forms.ItemCheckedEventHandler(this.checkedComboBox_biblioDbNames_ItemChecked);
@@ -276,11 +277,11 @@
             this.toolStripSeparator1,
             this.toolStripButton_prevQuery,
             this.toolStripButton_nextQuery});
-            this.toolStrip_search.Location = new System.Drawing.Point(446, 0);
+            this.toolStrip_search.Location = new System.Drawing.Point(394, 0);
             this.toolStrip_search.Name = "toolStrip_search";
             this.toolStrip_search.Padding = new System.Windows.Forms.Padding(0, 0, 2, 0);
             this.toolStrip_search.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
-            this.toolStrip_search.Size = new System.Drawing.Size(154, 40);
+            this.toolStrip_search.Size = new System.Drawing.Size(206, 40);
             this.toolStrip_search.TabIndex = 13;
             this.toolStrip_search.Text = "检索";
             // 
@@ -302,7 +303,8 @@
             this.toolStripMenuItem_searchKeyID,
             this.toolStripMenuItem_searchKeys,
             this.toolStripSeparator4,
-            this.ToolStripMenuItem_searchShareBiblio});
+            this.ToolStripMenuItem_searchShareBiblio,
+            this.ToolStripMenuItem_filterRecords});
             this.toolStripDropDownButton_searchKeys.Image = ((System.Drawing.Image)(resources.GetObject("toolStripDropDownButton_searchKeys.Image")));
             this.toolStripDropDownButton_searchKeys.ImageScaling = System.Windows.Forms.ToolStripItemImageScaling.None;
             this.toolStripDropDownButton_searchKeys.ImageTransparentColor = System.Drawing.Color.Magenta;
@@ -314,7 +316,7 @@
             // 
             this.ToolStripMenuItem_continueLoad.Enabled = false;
             this.ToolStripMenuItem_continueLoad.Name = "ToolStripMenuItem_continueLoad";
-            this.ToolStripMenuItem_continueLoad.Size = new System.Drawing.Size(218, 30);
+            this.ToolStripMenuItem_continueLoad.Size = new System.Drawing.Size(252, 30);
             this.ToolStripMenuItem_continueLoad.Text = "继续装入";
             this.ToolStripMenuItem_continueLoad.ToolTipText = "继续装入中断时尚未装入的那些浏览行";
             this.ToolStripMenuItem_continueLoad.Click += new System.EventHandler(this.ToolStripMenuItem_continueLoad_Click);
@@ -322,26 +324,26 @@
             // toolStripMenuItem_searchKeyID
             // 
             this.toolStripMenuItem_searchKeyID.Name = "toolStripMenuItem_searchKeyID";
-            this.toolStripMenuItem_searchKeyID.Size = new System.Drawing.Size(218, 30);
+            this.toolStripMenuItem_searchKeyID.Size = new System.Drawing.Size(252, 30);
             this.toolStripMenuItem_searchKeyID.Text = "带检索点的检索";
             this.toolStripMenuItem_searchKeyID.Click += new System.EventHandler(this.toolStripMenuItem_searchKeyID_Click);
             // 
             // toolStripMenuItem_searchKeys
             // 
             this.toolStripMenuItem_searchKeys.Name = "toolStripMenuItem_searchKeys";
-            this.toolStripMenuItem_searchKeys.Size = new System.Drawing.Size(218, 30);
+            this.toolStripMenuItem_searchKeys.Size = new System.Drawing.Size(252, 30);
             this.toolStripMenuItem_searchKeys.Text = "仅获得检索点";
             this.toolStripMenuItem_searchKeys.Click += new System.EventHandler(this.toolStripMenuItem_searchKeys_Click);
             // 
             // toolStripSeparator4
             // 
             this.toolStripSeparator4.Name = "toolStripSeparator4";
-            this.toolStripSeparator4.Size = new System.Drawing.Size(215, 6);
+            this.toolStripSeparator4.Size = new System.Drawing.Size(249, 6);
             // 
             // ToolStripMenuItem_searchShareBiblio
             // 
             this.ToolStripMenuItem_searchShareBiblio.Name = "ToolStripMenuItem_searchShareBiblio";
-            this.ToolStripMenuItem_searchShareBiblio.Size = new System.Drawing.Size(218, 30);
+            this.ToolStripMenuItem_searchShareBiblio.Size = new System.Drawing.Size(252, 30);
             this.ToolStripMenuItem_searchShareBiblio.Text = "使用共享网络";
             this.ToolStripMenuItem_searchShareBiblio.Click += new System.EventHandler(this.ToolStripMenuItem_searchShareBiblio_Click);
             // 
@@ -430,7 +432,7 @@
             // 
             // button_search
             // 
-            this.button_search.Location = new System.Drawing.Point(450, 43);
+            this.button_search.Location = new System.Drawing.Point(398, 43);
             this.button_search.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             this.button_search.Name = "button_search";
             this.button_search.Size = new System.Drawing.Size(0, 0);
@@ -445,9 +447,9 @@
             this.comboBox_location.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.comboBox_location.FormattingEnabled = true;
             this.comboBox_location.Location = new System.Drawing.Point(134, 162);
-            this.comboBox_location.Margin = new System.Windows.Forms.Padding(6, 6, 6, 6);
+            this.comboBox_location.Margin = new System.Windows.Forms.Padding(6);
             this.comboBox_location.Name = "comboBox_location";
-            this.comboBox_location.Size = new System.Drawing.Size(306, 26);
+            this.comboBox_location.Size = new System.Drawing.Size(254, 26);
             this.comboBox_location.TabIndex = 16;
             // 
             // tableLayoutPanel_main
@@ -481,7 +483,7 @@
             // 
             this.splitContainer_main.Dock = System.Windows.Forms.DockStyle.Fill;
             this.splitContainer_main.Location = new System.Drawing.Point(4, 22);
-            this.splitContainer_main.Margin = new System.Windows.Forms.Padding(4, 4, 4, 4);
+            this.splitContainer_main.Margin = new System.Windows.Forms.Padding(4);
             this.splitContainer_main.Name = "splitContainer_main";
             this.splitContainer_main.Orientation = System.Windows.Forms.Orientation.Horizontal;
             // 
@@ -503,7 +505,7 @@
             this.tabControl_query.Controls.Add(this.tabPage_logic);
             this.tabControl_query.Dock = System.Windows.Forms.DockStyle.Fill;
             this.tabControl_query.Location = new System.Drawing.Point(0, 0);
-            this.tabControl_query.Margin = new System.Windows.Forms.Padding(4, 4, 4, 4);
+            this.tabControl_query.Margin = new System.Windows.Forms.Padding(4);
             this.tabControl_query.Name = "tabControl_query";
             this.tabControl_query.SelectedIndex = 0;
             this.tabControl_query.Size = new System.Drawing.Size(726, 249);
@@ -514,9 +516,9 @@
             this.tabPage_simple.AutoScroll = true;
             this.tabPage_simple.Controls.Add(this.tableLayoutPanel_query);
             this.tabPage_simple.Location = new System.Drawing.Point(4, 28);
-            this.tabPage_simple.Margin = new System.Windows.Forms.Padding(4, 4, 4, 4);
+            this.tabPage_simple.Margin = new System.Windows.Forms.Padding(4);
             this.tabPage_simple.Name = "tabPage_simple";
-            this.tabPage_simple.Padding = new System.Windows.Forms.Padding(4, 4, 4, 4);
+            this.tabPage_simple.Padding = new System.Windows.Forms.Padding(4);
             this.tabPage_simple.Size = new System.Drawing.Size(718, 217);
             this.tabPage_simple.TabIndex = 0;
             this.tabPage_simple.Text = "简单";
@@ -527,10 +529,10 @@
             this.tabPage_logic.AutoScroll = true;
             this.tabPage_logic.Controls.Add(this.dp2QueryControl1);
             this.tabPage_logic.Location = new System.Drawing.Point(4, 28);
-            this.tabPage_logic.Margin = new System.Windows.Forms.Padding(4, 4, 4, 4);
+            this.tabPage_logic.Margin = new System.Windows.Forms.Padding(4);
             this.tabPage_logic.Name = "tabPage_logic";
-            this.tabPage_logic.Padding = new System.Windows.Forms.Padding(4, 4, 4, 4);
-            this.tabPage_logic.Size = new System.Drawing.Size(716, 217);
+            this.tabPage_logic.Padding = new System.Windows.Forms.Padding(4);
+            this.tabPage_logic.Size = new System.Drawing.Size(718, 217);
             this.tabPage_logic.TabIndex = 1;
             this.tabPage_logic.Text = "逻辑";
             this.tabPage_logic.UseVisualStyleBackColor = true;
@@ -539,10 +541,10 @@
             // 
             this.dp2QueryControl1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.dp2QueryControl1.Location = new System.Drawing.Point(4, 4);
-            this.dp2QueryControl1.Margin = new System.Windows.Forms.Padding(9, 9, 9, 9);
+            this.dp2QueryControl1.Margin = new System.Windows.Forms.Padding(9);
             this.dp2QueryControl1.Name = "dp2QueryControl1";
             this.dp2QueryControl1.PanelMode = DigitalPlatform.CommonControl.PanelMode.None;
-            this.dp2QueryControl1.Size = new System.Drawing.Size(708, 209);
+            this.dp2QueryControl1.Size = new System.Drawing.Size(710, 209);
             this.dp2QueryControl1.TabIndex = 0;
             this.dp2QueryControl1.GetList += new DigitalPlatform.CommonControl.GetListEventHandler(this.dp2QueryControl1_GetList);
             this.dp2QueryControl1.ViewXml += new System.EventHandler(this.dp2QueryControl1_ViewXml);
@@ -580,6 +582,13 @@
             // 
             this.columnHeader_1.Text = "1";
             this.columnHeader_1.Width = 300;
+            // 
+            // ToolStripMenuItem_filterRecords
+            // 
+            this.ToolStripMenuItem_filterRecords.Name = "ToolStripMenuItem_filterRecords";
+            this.ToolStripMenuItem_filterRecords.Size = new System.Drawing.Size(252, 30);
+            this.ToolStripMenuItem_filterRecords.Text = "智能筛选 ...";
+            this.ToolStripMenuItem_filterRecords.Click += new System.EventHandler(this.ToolStripMenuItem_filterRecords_Click);
             // 
             // BiblioSearchForm
             // 
@@ -624,7 +633,7 @@
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.TextBox textBox_queryWord;
         private System.Windows.Forms.Label label1;
-        private System.Windows.Forms.Label label3;
+        private System.Windows.Forms.Label label_biblioDbName;
         private System.Windows.Forms.ContextMenuStrip contextMenuStrip_biblioDb;
         private System.Windows.Forms.ToolStripMenuItem MenuItem_viewBiblioDbProperty;
         private System.Windows.Forms.TableLayoutPanel tableLayoutPanel_query;
@@ -659,5 +668,6 @@
         private System.Windows.Forms.ToolStripMenuItem ToolStripMenuItem_searchShareBiblio;
         private System.Windows.Forms.Label label4;
         private System.Windows.Forms.ComboBox comboBox_location;
+        private System.Windows.Forms.ToolStripMenuItem ToolStripMenuItem_filterRecords;
     }
 }

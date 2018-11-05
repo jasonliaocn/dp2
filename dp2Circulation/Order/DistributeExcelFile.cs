@@ -289,6 +289,7 @@ context.ContentEndRow + 1 + 1, context.DistributeEndColumn + 1);
                 //      1   在管辖范围内
                 int nRet = dp2StringUtil.DistributeInControlled(strDistribute,
                     strLibraryCode,
+                    out bool bAllOutOf,
                     out string strError);
                 if (nRet == -1)
                     throw new Exception(strError);
@@ -436,7 +437,7 @@ procGetOrderRecord
         static string GetCopyNumber(string strCopyString)
         {
             // 分离 "old[new]" 内的两个值
-            OrderDesignControl.ParseOldNewValue(strCopyString,
+            dp2StringUtil.ParseOldNewValue(strCopyString,
                 out string strOldCopy,
                 out string strNewCopy);
 
@@ -444,7 +445,7 @@ procGetOrderRecord
                 strOldCopy = "0";
 
             // 对 strOldCopy 进一步分解
-            return OrderDesignControl.GetCopyFromCopyString(strOldCopy);
+            return dp2StringUtil.GetCopyFromCopyString(strOldCopy);
         }
 
         static string GetState(string strXml)
@@ -473,7 +474,7 @@ procGetOrderRecord
             string strCopyString = DomUtil.GetElementText(dom.DocumentElement, "copy");
 
             // 分离 "old[new]" 内的两个值
-            OrderDesignControl.ParseOldNewValue(strCopyString,
+            dp2StringUtil.ParseOldNewValue(strCopyString,
                 out string strOldCopy,
                 out string strNewCopy);
 
@@ -481,8 +482,8 @@ procGetOrderRecord
                 strOldCopy = "0";
 
             // 对 strOldCopy 进一步分解
-            string strLeft = OrderDesignControl.GetCopyFromCopyString(strOldCopy);
-            string strRight = OrderDesignControl.GetRightFromCopyString(strOldCopy);
+            string strLeft = dp2StringUtil.GetCopyFromCopyString(strOldCopy);
+            string strRight = dp2StringUtil.GetRightFromCopyString(strOldCopy);
             if (string.IsNullOrEmpty(strRight))
                 strRight = "1"; // 默认 1
 
@@ -703,9 +704,13 @@ out copyNumberCell);
         }
 
         // 根据分馆身份过滤馆藏地列表。并在列表末尾自动添加空馆藏地事项
-        public static List<string> FilterLocationList(List<string> location_list, string strLibraryCode)
+        public static List<string> FilterLocationList(List<string> location_list,
+            string strLibraryCode)
         {
             location_list = dp2StringUtil.FilterLocationList(location_list, strLibraryCode);
+            if (location_list.Count == 0)
+                return location_list;
+
             // 增加 (空) 这一项
             string strBlank = Order.DistributeExcelFile.NULL_LOCATION_CAPTION;
             if (string.IsNullOrEmpty(strLibraryCode) == false && strLibraryCode != "[仅总馆]")
@@ -1070,9 +1075,6 @@ int MAX_CHARS = 50)
             return results;
         }
 
-
-
-
         public static List<string> GetTypeList(List<ColumnProperty> property_list,
             bool bRemovePrefix = true)
         {
@@ -1239,6 +1241,11 @@ int MAX_CHARS = 50)
             string[] lines = new string[] {
             "order_recpath -- 订购记录路径",
             "order_seller -- 渠道(书商)",
+
+            // 2018/8/22
+            "order_fixedPrice -- 码洋",
+            "order_discount -- 折扣",
+
             "order_price -- 订购价",
             "order_source -- 经费来源",
             // "order_copy -- 复本数",

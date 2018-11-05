@@ -12,6 +12,8 @@ using System.Collections;
 using System.Data;
 using System.Threading;
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
 
 using System.Data.SqlClient;
 using System.Data.SQLite;
@@ -22,11 +24,14 @@ using MySql.Data.MySqlClient;
 using Oracle.ManagedDataAccess.Client;
 using Oracle.ManagedDataAccess.Types;
 
+using Ghostscript.NET.Rasterizer;
+
 using DigitalPlatform.ResultSet;
 using DigitalPlatform.Text;
 using DigitalPlatform.Range;
 using DigitalPlatform.Xml;
 using DigitalPlatform.IO;
+using System.Data.Common;
 
 namespace DigitalPlatform.rms
 {
@@ -35,6 +40,9 @@ namespace DigitalPlatform.rms
     {
         // 对物理文件开始缓存和加速的开始尺寸
         const int CACHE_SIZE = 10 * 1024;   // -1;  // 10 * 1024;
+
+        // PDF 单页缓存
+        internal PageCache _pageCache = new PageCache(1000);
 
         internal StreamCache _streamCache = new StreamCache(100);
 
@@ -482,8 +490,66 @@ namespace DigitalPlatform.rms
                         + "Data Source=" + this.container.SqlServerName + ";"
                         // http://msdn2.microsoft.com/en-us/library/8xx3tyca(vs.71).aspx
                         + "Connect Timeout=" + nTimeout.ToString() + ";"
+                        // https://stackoverflow.com/questions/45086283/mysql-data-mysqlclient-mysqlexception-the-host-localhost-does-not-support-ssl
+                        + "SslMode=none;"   // 2018/9/25 当 mode 属性为空的时候，表示需要兼容以前安装的效果，那就相当于 None (SSL)
                         + "charset=utf8;";
+                }
+                else if (strMode.StartsWith("SslMode:"))
+                {
+                    string strUserID = "";
+                    string strPassword = "";
 
+                    // https://dev.mysql.com/doc/connector-net/en/connector-net-6-10-connection-options.html
+                    /*
+SslMode , SSL Mode , Ssl-Mode 
+Default: Preferred 
+This option was introduced in Connector/NET 6.2.1 and has the following values: 
+None - Do not use SSL. 
+Preferred - Use SSL if the server supports it, but allow connection in all cases. 
+Required - Always use SSL. Deny connection if server does not support SSL. 
+VerifyCA - Always use SSL. Validate the CA but tolerate name mismatch. 
+VerifyFull - Always use SSL. Fail if the host name is not correct. 
+* */
+                    string strSslMode = strMode.Substring("SslMode:".Length);
+                    // 注意：mode 属性不为空，但 SslMode: 为空的情况，等同于 Preferred 情况，也就是连接字符串中不包含 SslMode=xxx; 参数的情况
+                    if (strSslMode == "Preferred")
+                        strSslMode = "";
+
+                    strUserID = DomUtil.GetAttr(nodeDataSource, "userid").Trim();
+                    if (strUserID == "")
+                    {
+                        strError = "服务器配置文件不合法，未给根元素下级的<datasource>定义'userid'属性，或'userid'属性值为空。";
+                        return -1;
+                    }
+
+                    strPassword = DomUtil.GetAttr(nodeDataSource, "password").Trim();
+                    if (strPassword == "")
+                    {
+                        strError = "服务器配置文件不合法，未给根元素下级的<datasource>定义'password'属性，或'password'属性值为空。";
+                        return -1;
+                    }
+                    // password可能为空
+                    try
+                    {
+                        strPassword = Cryptography.Decrypt(strPassword,
+                                "dp2003");
+                    }
+                    catch
+                    {
+                        strError = "服务器配置文件不合法，根元素下级的<datasource>定义'password'属性值不合法。";
+                        return -1;
+                    }
+
+                    strConnection = @"Persist Security Info=False;"
+                        + "User ID=" + strUserID + ";"    //帐户和密码
+                        + "Password=" + strPassword + ";"
+                        //+ "Integrated Security=SSPI; "      //信任连接
+                        + "Data Source=" + this.container.SqlServerName + ";"
+                        // http://msdn2.microsoft.com/en-us/library/8xx3tyca(vs.71).aspx
+                        + "Connect Timeout=" + nTimeout.ToString() + ";"
+                        // https://stackoverflow.com/questions/45086283/mysql-data-mysqlclient-mysqlexception-the-host-localhost-does-not-support-ssl
+                        + (string.IsNullOrEmpty(strSslMode) ? "" : "SslMode=" + strSslMode + ";")    // 2018/9/23
+                        + "charset=utf8;";
                 }
                 else if (strMode == "SSPI") // 2006/3/22
                 {
@@ -682,6 +748,16 @@ namespace DigitalPlatform.rms
 #endif
         }
 #endif
+        static string GetExceptionString(DbCommand command,
+            string strText,
+            Exception ex)
+        {
+            return strText + "\r\n"
+    + ex.Message + "\r\n"
+    + "command.CommandTimeout:" + command.CommandTimeout + "\r\n"
+    + "SQL命令:\r\n"
+    + command.CommandText;
+        }
 
         // 初始化数据库，注意虚函数不能为private
         // parameter:
@@ -751,6 +827,7 @@ namespace DigitalPlatform.rms
                             if (string.IsNullOrEmpty(this.m_strObjectDir) == false)
                             {
                                 _streamCache.ClearAll();
+                                _pageCache.ClearAll();
                                 PathUtil.DeleteDirectory(this.m_strObjectDir);
                                 PathUtil.TryCreateDir(this.m_strObjectDir);
                             }
@@ -820,6 +897,7 @@ namespace DigitalPlatform.rms
                             {
                                 strError = "建索引出错。\r\n"
                                     + ex.Message + "\r\n"
+                                        + "command.CommandTimeout:" + command.CommandTimeout + "\r\n"
                                     + "SQL命令:\r\n"
                                     + strCommand;
                                 return -1;
@@ -871,6 +949,7 @@ namespace DigitalPlatform.rms
                         if (string.IsNullOrEmpty(this.m_strObjectDir) == false)
                         {
                             _streamCache.ClearAll();
+                            _pageCache.ClearAll();
                             PathUtil.DeleteDirectory(this.m_strObjectDir);
 
                             PathUtil.TryCreateDir(this.m_strObjectDir);
@@ -898,6 +977,7 @@ namespace DigitalPlatform.rms
                         using (SQLiteCommand command = new SQLiteCommand(strCommand,
                             connection))
                         {
+                            // command.CommandTimeout = 120;   // 默认 30
                             IDbTransaction trans = null;
 
                             trans = connection.BeginTransaction();  // 2017/9/3
@@ -909,10 +989,16 @@ namespace DigitalPlatform.rms
                                 }
                                 catch (Exception ex)
                                 {
+#if NO
                                     strError = "建表出错。\r\n"
                                         + ex.Message + "\r\n"
                                         + "SQL命令:\r\n"
                                         + strCommand;
+#endif
+                                    strError = GetExceptionString(command,
+"建表出错。",
+ex);
+
                                     return -1;
                                 }
 
@@ -928,14 +1014,22 @@ namespace DigitalPlatform.rms
                                 command.CommandText = strCommand;
                                 try
                                 {
+                                    // testing 
+                                    // throw new Exception("模拟抛出异常");
                                     command.ExecuteNonQuery();
                                 }
                                 catch (Exception ex)
                                 {
+#if NO
                                     strError = "建索引出错。\r\n"
                                         + ex.Message + "\r\n"
+                                        + "command.CommandTimeout:" + command.CommandTimeout + "\r\n"
                                         + "SQL命令:\r\n"
                                         + strCommand;
+#endif
+                                    strError = GetExceptionString(command,
+"建索引出错。",
+ex);
                                     return -1;
                                 }
 
@@ -975,6 +1069,10 @@ namespace DigitalPlatform.rms
                         using (MySqlCommand command = new MySqlCommand(strCommand,
                             connection))
                         {
+                            // 2018/9/17
+                            // 设置 command.CommandTimeout
+                            command.CommandTimeout = 120;   // 默认 30。由于 MySQL 创建一个数据库较慢，所以这里专门设置为 120 秒
+
                             IDbTransaction trans = null;
 
                             // trans = connection.BeginTransaction();  // 2017/9/3
@@ -987,10 +1085,16 @@ namespace DigitalPlatform.rms
                                 }
                                 catch (Exception ex)
                                 {
+#if NO
                                     strError = "建库出错。\r\n"
                                         + ex.Message + "\r\n"
+                                        + "command.CommandTimeout:" + command.CommandTimeout + "\r\n"
                                         + "SQL命令:\r\n"
                                         + strCommand;
+#endif
+                                    strError = GetExceptionString(command,
+                                        "建库出错。",
+                                        ex);
                                     return -1;
                                 }
 
@@ -1008,10 +1112,16 @@ namespace DigitalPlatform.rms
                                 }
                                 catch (Exception ex)
                                 {
+#if NO
                                     strError = "建表出错。\r\n"
                                         + ex.Message + "\r\n"
                                         + "SQL命令:\r\n"
                                         + strCommand;
+#endif
+                                    strError = GetExceptionString(command,
+    "建表出错。",
+    ex);
+
                                     return -1;
                                 }
 
@@ -1031,10 +1141,17 @@ namespace DigitalPlatform.rms
                                 }
                                 catch (Exception ex)
                                 {
+#if NO
                                     strError = "建索引出错。\r\n"
                                         + ex.Message + "\r\n"
+                                        + "command.CommandTimeout:" + command.CommandTimeout + "\r\n"
                                         + "SQL命令:\r\n"
                                         + strCommand;
+#endif
+                                    strError = GetExceptionString(command,
+"建索引出错。",
+ex);
+
                                     return -1;
                                 }
                                 if (trans != null)
@@ -1066,6 +1183,7 @@ namespace DigitalPlatform.rms
                         if (string.IsNullOrEmpty(this.m_strObjectDir) == false)
                         {
                             _streamCache.ClearAll();
+                            _pageCache.ClearAll();
                             PathUtil.DeleteDirectory(this.m_strObjectDir);
                             PathUtil.TryCreateDir(this.m_strObjectDir);
                         }
@@ -1166,6 +1284,7 @@ namespace DigitalPlatform.rms
                                 {
                                     strError = "建索引出错。\r\n"
                                         + ex.Message + "\r\n"
+                                        + "command.CommandTimeout:" + command.CommandTimeout + "\r\n"
                                         + "SQL命令:\r\n"
                                         + strLine;
                                     return -1;
@@ -1190,6 +1309,7 @@ namespace DigitalPlatform.rms
                         if (string.IsNullOrEmpty(this.m_strObjectDir) == false)
                         {
                             _streamCache.ClearAll();
+                            _pageCache.ClearAll();
                             PathUtil.DeleteDirectory(this.m_strObjectDir);
                             PathUtil.TryCreateDir(this.m_strObjectDir);
                         }
@@ -2590,11 +2710,14 @@ namespace DigitalPlatform.rms
             #region MySql
             else if (strSqlServerType == SqlServerType.MySql)
             {
+                // https://stackoverflow.com/questions/28329134/drop-index-query-is-slow
+                string strAlgorithm = "";   // " ALGORITHM=INPLACE ";
+
                 strCommand = "use " + this.m_strSqlDbName + " ;\n";
                 if (StringUtil.IsInList("records", strIndexTypeList) == true)
                 {
                     strCommand += " CREATE INDEX records_id_index " + "\n"
-    + " ON records (id) ;\n";
+    + " ON records (id) " + strAlgorithm + ";\n";
                 }
 
                 if (StringUtil.IsInList("keys", strIndexTypeList) == true)
@@ -2618,14 +2741,15 @@ namespace DigitalPlatform.rms
                             TableInfo tableInfo = (TableInfo)aTableInfo[i];
 
                             strCommand += " CREATE INDEX " + tableInfo.SqlTableName + "_keystring_index \n"
-                                + " ON " + tableInfo.SqlTableName + " " + KEY_COL_LIST + " ;\n";
+                                + " ON " + tableInfo.SqlTableName + " " + KEY_COL_LIST + " " + strAlgorithm + ";\n";
                             strCommand += " CREATE INDEX " + tableInfo.SqlTableName + "_keystringnum_index \n"
-                                + " ON " + tableInfo.SqlTableName + " " + KEYNUM_COL_LIST + " ;\n";
+                                + " ON " + tableInfo.SqlTableName + " " + KEYNUM_COL_LIST + " " + strAlgorithm + ";\n";
                             strCommand += " CREATE INDEX " + tableInfo.SqlTableName + "_idstring_index \n"
-                                + " ON " + tableInfo.SqlTableName + " (idstring) ;\n";
+                                + " ON " + tableInfo.SqlTableName + " (idstring) " + strAlgorithm + ";\n";
                         }
                     }
                 }
+
             }
             #endregion // MySql
 
@@ -2978,6 +3102,7 @@ namespace DigitalPlatform.rms
                         if (Directory.Exists(strRealDir) == true)
                         {
                             _streamCache.ClearAll();
+                            _pageCache.ClearAll();
                             PathUtil.DeleteDirectory(strRealDir);
                         }
                     }
@@ -2995,6 +3120,7 @@ namespace DigitalPlatform.rms
                     if (string.IsNullOrEmpty(this.m_strObjectDir) == false)
                     {
                         _streamCache.ClearAll();
+                        _pageCache.ClearAll();
                         PathUtil.DeleteDirectory(this.m_strObjectDir);
                     }
                 }
@@ -3050,321 +3176,313 @@ namespace DigitalPlatform.rms
             bool bOutputKeyCount = StringUtil.IsInList("keycount", strOutputStyle);
             bool bOutputKeyID = StringUtil.IsInList("keyid", strOutputStyle);
 
-            // SQLite采用保守连接
-            Connection connection = new Connection(this,
-                this.m_strConnString);
-            connection.TryOpen();
-            try
+            SqlServerType type = this.container.SqlServerType;
+
+            string strPattern = "N'[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'";
+            if (type == SqlServerType.MsSqlServer)
+                strPattern = "N'[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'";
+            else if (type == SqlServerType.SQLite)
+                strPattern = "'__________'";
+            else if (type == SqlServerType.MySql)
+                strPattern = "'__________'";
+            else if (type == SqlServerType.Oracle)
+                strPattern = "'__________'";
+            else
+                throw new Exception("未知的 SqlServerType");
+
+            List<DbParameter> aSqlParameter = new List<DbParameter>();
+            string strWhere = "";
+            if (searchItem.Match == "left"
+                || searchItem.Match == "")
             {
-                string strPattern = "N'[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'";
-                if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                    strPattern = "N'[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'";
-                else if (connection.SqlServerType == SqlServerType.SQLite)
-                    strPattern = "'__________'";
-                else if (connection.SqlServerType == SqlServerType.MySql)
-                    strPattern = "'__________'";
-                else if (connection.SqlServerType == SqlServerType.Oracle)
-                    strPattern = "'__________'";
-                else
-                    throw new Exception("未知的 SqlServerType");
-
-                List<object> aSqlParameter = new List<object>();
-                string strWhere = "";
-                if (searchItem.Match == "left"
-                    || searchItem.Match == "")
+                strWhere = " WHERE id LIKE @id and id like " + strPattern + " ";
+                if (type == SqlServerType.MsSqlServer)
                 {
-                    strWhere = " WHERE id LIKE @id and id like " + strPattern + " ";
-                    if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                    {
-                        SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
-                        temp.Value = searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.SQLite)
-                    {
-                        SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
-                        temp.Value = searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.MySql)
-                    {
-                        MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
-                        temp.Value = searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.Oracle)
-                    {
-                        strWhere = strWhere.Replace("@", ":");
-                        OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
-                        temp.Value = searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
+                    SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
+                    temp.Value = searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
                 }
-                else if (searchItem.Match == "middle")
+                else if (type == SqlServerType.SQLite)
                 {
-                    strWhere = " WHERE id LIKE @id and id like " + strPattern + " ";
-                    if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                    {
-                        SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
-                        temp.Value = "%" + searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.SQLite)
-                    {
-                        SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
-                        temp.Value = "%" + searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.MySql)
-                    {
-                        MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
-                        temp.Value = "%" + searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.Oracle)
-                    {
-                        strWhere = strWhere.Replace("@", ":");
-                        OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
-                        temp.Value = "%" + searchItem.Word + "%";
-                        aSqlParameter.Add(temp);
-                    }
-
+                    SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
+                    temp.Value = searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
                 }
-                else if (searchItem.Match == "right")
+                else if (type == SqlServerType.MySql)
                 {
-                    strWhere = " WHERE id LIKE @id and id like " + strPattern + " ";
-                    if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                    {
-                        SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
-                        temp.Value = "%" + searchItem.Word;
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.SQLite)
-                    {
-                        SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
-                        temp.Value = "%" + searchItem.Word;
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.MySql)
-                    {
-                        MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
-                        temp.Value = "%" + searchItem.Word;
-                        aSqlParameter.Add(temp);
-                    }
-                    else if (connection.SqlServerType == SqlServerType.Oracle)
-                    {
-                        strWhere = strWhere.Replace("@", ":");
-                        OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
-                        temp.Value = "%" + searchItem.Word;
-                        aSqlParameter.Add(temp);
-                    }
+                    MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
+                    temp.Value = searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
                 }
-                else if (searchItem.Match == "exact")
+                else if (type == SqlServerType.Oracle)
                 {
-                    if (searchItem.DataType == "string")
-                        searchItem.Word = DbPath.GetID10(searchItem.Word);
+                    strWhere = strWhere.Replace("@", ":");
+                    OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
+                    temp.Value = searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
+                }
+            }
+            else if (searchItem.Match == "middle")
+            {
+                strWhere = " WHERE id LIKE @id and id like " + strPattern + " ";
+                if (type == SqlServerType.MsSqlServer)
+                {
+                    SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
+                    temp.Value = "%" + searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
+                }
+                else if (type == SqlServerType.SQLite)
+                {
+                    SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
+                    temp.Value = "%" + searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
+                }
+                else if (type == SqlServerType.MySql)
+                {
+                    MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
+                    temp.Value = "%" + searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
+                }
+                else if (type == SqlServerType.Oracle)
+                {
+                    strWhere = strWhere.Replace("@", ":");
+                    OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
+                    temp.Value = "%" + searchItem.Word + "%";
+                    aSqlParameter.Add(temp);
+                }
 
-                    if (searchItem.Relation == "draw"
-                    || searchItem.Relation == "range")
+            }
+            else if (searchItem.Match == "right")
+            {
+                strWhere = " WHERE id LIKE @id and id like " + strPattern + " ";
+                if (type == SqlServerType.MsSqlServer)
+                {
+                    SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
+                    temp.Value = "%" + searchItem.Word;
+                    aSqlParameter.Add(temp);
+                }
+                else if (type == SqlServerType.SQLite)
+                {
+                    SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
+                    temp.Value = "%" + searchItem.Word;
+                    aSqlParameter.Add(temp);
+                }
+                else if (type == SqlServerType.MySql)
+                {
+                    MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
+                    temp.Value = "%" + searchItem.Word;
+                    aSqlParameter.Add(temp);
+                }
+                else if (type == SqlServerType.Oracle)
+                {
+                    strWhere = strWhere.Replace("@", ":");
+                    OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
+                    temp.Value = "%" + searchItem.Word;
+                    aSqlParameter.Add(temp);
+                }
+            }
+            else if (searchItem.Match == "exact")
+            {
+                if (searchItem.DataType == "string")
+                    searchItem.Word = DbPath.GetID10(searchItem.Word);
+
+                if (searchItem.Relation == "draw"
+                || searchItem.Relation == "range")
+                {
+                    bool bRet = StringUtil.SplitRangeEx(searchItem.Word,
+                        out string strStartID,
+                        out string strEndID);
+
+                    if (bRet == true)
                     {
-                        string strStartID;
-                        string strEndID;
-                        bool bRet = StringUtil.SplitRangeEx(searchItem.Word,
-                            out strStartID,
-                            out strEndID);
+                        strStartID = DbPath.GetID10(strStartID);
+                        strEndID = DbPath.GetID10(strEndID);
 
-                        if (bRet == true)
+                        strWhere = " WHERE @idMin <=id and id<= @idMax and id like " + strPattern + " ";
+
+                        if (type == SqlServerType.MsSqlServer)
                         {
-                            strStartID = DbPath.GetID10(strStartID);
-                            strEndID = DbPath.GetID10(strEndID);
+                            SqlParameter temp = new SqlParameter("@idMin", SqlDbType.NVarChar);
+                            temp.Value = strStartID;
+                            aSqlParameter.Add(temp);
 
-                            strWhere = " WHERE @idMin <=id and id<= @idMax and id like " + strPattern + " ";
-
-                            if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                            {
-                                SqlParameter temp = new SqlParameter("@idMin", SqlDbType.NVarChar);
-                                temp.Value = strStartID;
-                                aSqlParameter.Add(temp);
-
-                                temp = new SqlParameter("@idMax", SqlDbType.NVarChar);
-                                temp.Value = strEndID;
-                                aSqlParameter.Add(temp);
-                            }
-                            else if (connection.SqlServerType == SqlServerType.SQLite)
-                            {
-                                SQLiteParameter temp = new SQLiteParameter("@idMin", DbType.String);
-                                temp.Value = strStartID;
-                                aSqlParameter.Add(temp);
-
-                                temp = new SQLiteParameter("@idMax", DbType.String);
-                                temp.Value = strEndID;
-                                aSqlParameter.Add(temp);
-                            }
-                            else if (connection.SqlServerType == SqlServerType.MySql)
-                            {
-                                MySqlParameter temp = new MySqlParameter("@idMin", MySqlDbType.String);
-                                temp.Value = strStartID;
-                                aSqlParameter.Add(temp);
-
-                                temp = new MySqlParameter("@idMax", MySqlDbType.String);
-                                temp.Value = strEndID;
-                                aSqlParameter.Add(temp);
-                            }
-                            else if (connection.SqlServerType == SqlServerType.Oracle)
-                            {
-                                strWhere = strWhere.Replace("@", ":");
-
-                                OracleParameter temp = new OracleParameter(":idMin", OracleDbType.NVarchar2);
-                                temp.Value = strStartID;
-                                aSqlParameter.Add(temp);
-
-                                temp = new OracleParameter(":idMax", OracleDbType.NVarchar2);
-                                temp.Value = strEndID;
-                                aSqlParameter.Add(temp);
-                            }
+                            temp = new SqlParameter("@idMax", SqlDbType.NVarChar);
+                            temp.Value = strEndID;
+                            aSqlParameter.Add(temp);
                         }
-                        else
+                        else if (type == SqlServerType.SQLite)
                         {
-                            string strOperator;
-                            string strRealText;
-                            StringUtil.GetPartCondition(searchItem.Word,
-                                out strOperator,
-                                out strRealText);
+                            SQLiteParameter temp = new SQLiteParameter("@idMin", DbType.String);
+                            temp.Value = strStartID;
+                            aSqlParameter.Add(temp);
 
-                            strRealText = DbPath.GetID10(strRealText);
-                            strWhere = " WHERE id " + strOperator + " @id and id like " + strPattern + " ";
+                            temp = new SQLiteParameter("@idMax", DbType.String);
+                            temp.Value = strEndID;
+                            aSqlParameter.Add(temp);
+                        }
+                        else if (type == SqlServerType.MySql)
+                        {
+                            MySqlParameter temp = new MySqlParameter("@idMin", MySqlDbType.String);
+                            temp.Value = strStartID;
+                            aSqlParameter.Add(temp);
 
-                            if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                            {
-                                SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
-                                temp.Value = strRealText;
-                                aSqlParameter.Add(temp);
-                            }
-                            else if (connection.SqlServerType == SqlServerType.SQLite)
-                            {
-                                SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
-                                temp.Value = strRealText;
-                                aSqlParameter.Add(temp);
-                            }
-                            else if (connection.SqlServerType == SqlServerType.MySql)
-                            {
-                                MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
-                                temp.Value = strRealText;
-                                aSqlParameter.Add(temp);
-                            }
-                            else if (connection.SqlServerType == SqlServerType.Oracle)
-                            {
-                                strWhere = strWhere.Replace("@", ":");
+                            temp = new MySqlParameter("@idMax", MySqlDbType.String);
+                            temp.Value = strEndID;
+                            aSqlParameter.Add(temp);
+                        }
+                        else if (type == SqlServerType.Oracle)
+                        {
+                            strWhere = strWhere.Replace("@", ":");
 
-                                OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
-                                temp.Value = strRealText;
-                                aSqlParameter.Add(temp);
-                            }
+                            OracleParameter temp = new OracleParameter(":idMin", OracleDbType.NVarchar2);
+                            temp.Value = strStartID;
+                            aSqlParameter.Add(temp);
+
+                            temp = new OracleParameter(":idMax", OracleDbType.NVarchar2);
+                            temp.Value = strEndID;
+                            aSqlParameter.Add(temp);
                         }
                     }
                     else
                     {
-                        searchItem.Word = DbPath.GetID10(searchItem.Word);
-                        strWhere = " WHERE id " + searchItem.Relation + " @id and id like " + strPattern + " ";
+                        StringUtil.GetPartCondition(searchItem.Word,
+                            out string strOperator,
+                            out string strRealText);
 
-                        if (connection.SqlServerType == SqlServerType.MsSqlServer)
+                        strRealText = DbPath.GetID10(strRealText);
+                        strWhere = " WHERE id " + strOperator + " @id and id like " + strPattern + " ";
+
+                        if (type == SqlServerType.MsSqlServer)
                         {
                             SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
-                            temp.Value = searchItem.Word;
+                            temp.Value = strRealText;
                             aSqlParameter.Add(temp);
                         }
-                        else if (connection.SqlServerType == SqlServerType.SQLite)
+                        else if (type == SqlServerType.SQLite)
                         {
                             SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
-                            temp.Value = searchItem.Word;
+                            temp.Value = strRealText;
                             aSqlParameter.Add(temp);
                         }
-                        else if (connection.SqlServerType == SqlServerType.MySql)
+                        else if (type == SqlServerType.MySql)
                         {
                             MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
-                            temp.Value = searchItem.Word;
+                            temp.Value = strRealText;
                             aSqlParameter.Add(temp);
                         }
-                        else if (connection.SqlServerType == SqlServerType.Oracle)
+                        else if (type == SqlServerType.Oracle)
                         {
                             strWhere = strWhere.Replace("@", ":");
 
                             OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
-                            temp.Value = searchItem.Word;
+                            temp.Value = strRealText;
                             aSqlParameter.Add(temp);
                         }
                     }
                 }
-
-                string strTop = "";
-                string strLimit = "";
-                if (searchItem.MaxCount != -1)  // 只命中指定的条数
+                else
                 {
-                    if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                        strTop = " TOP " + Convert.ToString(searchItem.MaxCount) + " ";
-                    else if (connection.SqlServerType == SqlServerType.SQLite)
-                        strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
-                    else if (connection.SqlServerType == SqlServerType.MySql)
-                        strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
-                    else if (connection.SqlServerType == SqlServerType.Oracle)
-                        strLimit = " WHERE rownum <= " + Convert.ToString(searchItem.MaxCount) + " ";
-                    else
-                        throw new Exception("未知的 SqlServerType");
-                }
+                    searchItem.Word = DbPath.GetID10(searchItem.Word);
+                    strWhere = " WHERE id " + searchItem.Relation + " @id and id like " + strPattern + " ";
 
-                string strOrderBy = "";
-
-                // Oracle下迫使使用顺序
-                if (connection.SqlServerType == SqlServerType.Oracle)
-                {
-                    if (string.IsNullOrEmpty(searchItem.IdOrder) == true)
+                    if (type == SqlServerType.MsSqlServer)
                     {
-                        searchItem.IdOrder = "ASC";
+                        SqlParameter temp = new SqlParameter("@id", SqlDbType.NVarChar);
+                        temp.Value = searchItem.Word;
+                        aSqlParameter.Add(temp);
+                    }
+                    else if (type == SqlServerType.SQLite)
+                    {
+                        SQLiteParameter temp = new SQLiteParameter("@id", DbType.String);
+                        temp.Value = searchItem.Word;
+                        aSqlParameter.Add(temp);
+                    }
+                    else if (type == SqlServerType.MySql)
+                    {
+                        MySqlParameter temp = new MySqlParameter("@id", MySqlDbType.String);
+                        temp.Value = searchItem.Word;
+                        aSqlParameter.Add(temp);
+                    }
+                    else if (type == SqlServerType.Oracle)
+                    {
+                        strWhere = strWhere.Replace("@", ":");
+
+                        OracleParameter temp = new OracleParameter(":id", OracleDbType.NVarchar2);
+                        temp.Value = searchItem.Word;
+                        aSqlParameter.Add(temp);
                     }
                 }
+            }
 
-                if (searchItem.IdOrder != "")
+            string strTop = "";
+            string strLimit = "";
+            if (searchItem.MaxCount != -1)  // 只命中指定的条数
+            {
+                if (type == SqlServerType.MsSqlServer)
+                    strTop = " TOP " + Convert.ToString(searchItem.MaxCount) + " ";
+                else if (type == SqlServerType.SQLite)
+                    strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                else if (type == SqlServerType.MySql)
+                    strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                else if (type == SqlServerType.Oracle)
+                    strLimit = " WHERE rownum <= " + Convert.ToString(searchItem.MaxCount) + " ";
+                else
+                    throw new Exception("未知的 SqlServerType");
+            }
+
+            string strOrderBy = "";
+
+            // Oracle下迫使使用顺序
+            if (type == SqlServerType.Oracle)
+            {
+                if (string.IsNullOrEmpty(searchItem.IdOrder) == true)
                 {
-                    strOrderBy = "ORDER BY id " + searchItem.IdOrder + " ";
-
-                    // 2010/5/10
-                    string strTemp = searchItem.IdOrder.ToLower();
-                    if (strTemp.IndexOf("desc") != -1)
-                        resultSet.Asc = -1;
+                    searchItem.IdOrder = "ASC";
                 }
+            }
 
-                string strCommand = "";
-                if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                    strCommand = "use " + this.m_strSqlDbName;
-                else if (connection.SqlServerType == SqlServerType.MySql)
-                    strCommand = "use `" + this.m_strSqlDbName + "` ;\n";
+            if (searchItem.IdOrder != "")
+            {
+                strOrderBy = "ORDER BY id " + searchItem.IdOrder + " ";
 
-                strCommand += " SELECT "
-            + " DISTINCT "
-            + strTop
-            + (bOutputKeyID == false ? " id " : " id AS keystring, id, 'recid' AS fromstring ")
-            + " FROM records "
-            + strWhere
-            + " " + strOrderBy
-            + " " + strLimit + "\n";
+                // 2010/5/10
+                string strTemp = searchItem.IdOrder.ToLower();
+                if (strTemp.IndexOf("desc") != -1)
+                    resultSet.Asc = -1;
+            }
 
-                if (connection.SqlServerType == SqlServerType.MsSqlServer)
-                    strCommand += " use master " + "\n";
+            string strCommand = "";
+            if (type == SqlServerType.MsSqlServer)
+                strCommand = "use " + this.m_strSqlDbName;
+            else if (type == SqlServerType.MySql)
+                strCommand = "use `" + this.m_strSqlDbName + "` ;\n";
 
-                // Oracle的语句非常特殊
-                if (connection.SqlServerType == SqlServerType.Oracle)
-                {
-                    // TODO 如果没有 order by 子句， rownum还可以简化
-                    if (string.IsNullOrEmpty(strLimit) == false)
-                        strCommand = "SELECT * from ( SELECT "
-    + " DISTINCT "
-    + (bOutputKeyID == false ? " id " : " id keystring, id, 'recid' fromstring ")
-    + " FROM " + this.m_strSqlDbName + "_records "
-    + strWhere
-    + " " + strOrderBy
-    + ") " + strLimit + "\n";
-                    else
-                        strCommand = "SELECT "
+            strCommand += " SELECT "
+        + " DISTINCT "
+        + strTop
+        + (bOutputKeyID == false ? " id " : " id AS keystring, id, 'recid' AS fromstring ")
+        + " FROM records "
+        + strWhere
+        + " " + strOrderBy
+        + " " + strLimit + "\n";
+
+            if (type == SqlServerType.MsSqlServer)
+                strCommand += " use master " + "\n";
+
+            // Oracle的语句非常特殊
+            if (type == SqlServerType.Oracle)
+            {
+                // TODO 如果没有 order by 子句， rownum还可以简化
+                if (string.IsNullOrEmpty(strLimit) == false)
+                    strCommand = "SELECT * from ( SELECT "
++ " DISTINCT "
++ (bOutputKeyID == false ? " id " : " id keystring, id, 'recid' fromstring ")
++ " FROM " + this.m_strSqlDbName + "_records "
++ strWhere
++ " " + strOrderBy
++ ") " + strLimit + "\n";
+                else
+                    strCommand = "SELECT "
 + " DISTINCT "
 + (bOutputKeyID == false ? " id " : " id keystring, id, 'recid' fromstring ")
 + " FROM " + this.m_strSqlDbName + "_records "
@@ -3372,491 +3490,85 @@ namespace DigitalPlatform.rms
 + " " + strOrderBy
 + "\n";
 
-                }
+            }
 
+            int nRet = ExecuteQueryFillResultSet(
+handle,
+strCommand,
+aSqlParameter,
+resultSet,
+searchItem.MaxCount,
+GetOutputStyle(strOutputStyle),
+true,
+out strError);
+            if (nRet == -1 || nRet == 0)
+                return nRet;
+#if NO
+            // SQLite采用保守连接
+            Connection connection = new Connection(this,
+                this.m_strConnString);
+            connection.TryOpen();
+            try
+            {
+
+                DbCommand command = null;
 
                 if (connection.SqlServerType == SqlServerType.MsSqlServer)
                 {
-                    SqlCommand command = new SqlCommand(strCommand,
+                    command = new SqlCommand(strCommand,
                         connection.SqlConnection);
-                    try
-                    {
-                        command.CommandTimeout = 20 * 60;  // 把检索时间变大
-                        foreach (SqlParameter sqlParameter in aSqlParameter)
-                        {
-                            command.Parameters.Add(sqlParameter);
-                        }
-
-                        IAsyncResult r = command.BeginExecuteReader(CommandBehavior.CloseConnection);
-                        while (true)
-                        {
-                            if (handle != null)
-                            {
-                                if (handle.DoIdle() == false)
-                                {
-                                    command.Cancel();
-                                    try
-                                    {
-                                        command.EndExecuteReader(r);
-                                    }
-                                    catch
-                                    {
-                                    }
-                                    strError = "用户中断";
-                                    return -1;
-                                }
-                            }
-                            else
-                                break;
-
-                            bool bRet = r.AsyncWaitHandle.WaitOne(100, false);  //millisecondsTimeout
-                            if (bRet == true)
-                                break;
-                        }
-
-                        SqlDataReader reader = command.EndExecuteReader(r);
-                        try
-                        {
-                            if (reader == null
-                                || reader.HasRows == false)
-                            {
-                                return 0;
-                            }
-
-                            int nLoopCount = 0;
-                            while (reader.Read())
-                            {
-                                if (nLoopCount % 10000 == 0)
-                                {
-                                    if (handle != null)
-                                    {
-                                        if (handle.DoIdle() == false)
-                                        {
-                                            strError = "用户中断";
-                                            return -1;
-                                        }
-                                    }
-                                }
-
-                                string strID = ((string)reader[0]);
-                                if (strID.Length != 10)
-                                {
-                                    strError = "结果集中出现了长度不是10位的记录号，不正常";
-                                    return -1;
-                                }
-
-#if NO
-                        string strId = this.FullID + "/" + strID;   //记录路径格式：库ID/记录号
-                        resultSet.Add(new DpRecord(strId));
-#endif
-                                if (bOutputKeyCount == true)
-                                {
-                                    DpRecord dprecord = new DpRecord((string)reader[0]);
-                                    dprecord.Index = 1;
-                                    resultSet.Add(dprecord);
-                                }
-                                else if (bOutputKeyID == true)
-                                {
-                                    // datareader key, id
-                                    // 结果集格式 key, path
-                                    string strKey = (string)reader[0];
-                                    string strId = this.FullID + "/" + (string)reader[1]; // 格式为：库id/记录号
-                                    string strFrom = (string)reader[2];
-                                    DpRecord record = new DpRecord(strId);
-                                    // new DpRecord(strKey + "," + strId)
-                                    record.BrowseText = strKey + new string(DpResultSetManager.FROM_LEAD, 1) + strFrom;
-                                    resultSet.Add(record);
-                                }
-                                else
-                                {
-                                    string strId = "";
-                                    strId = this.FullID + "/" + (string)reader[0]; // 记录格式为：库id/记录号
-                                    resultSet.Add(new DpRecord(strId));
-                                }
-
-                                nLoopCount++;
-
-                                if (nLoopCount % 100 == 0)
-                                    Thread.Sleep(1);
-                            }
-                        }
-                        finally
-                        {
-                            if (reader != null)
-                                reader.Close();
-                        }
-                    } // end of using command
-                    finally
-                    {
-                        if (command != null)
-                            command.Dispose();
-                    }
                 }
                 else if (connection.SqlServerType == SqlServerType.SQLite)
                 {
                     // strCommand = "SELECT id FROM records WHERE id LIKE '__________' ";
-                    SQLiteCommand command = new SQLiteCommand(strCommand,
+                    command = new SQLiteCommand(strCommand,
                         connection.SQLiteConnection);
-                    try
-                    {
-                        command.CommandTimeout = 20 * 60;  // 把检索时间变大
-                        foreach (SQLiteParameter sqlParameter in aSqlParameter)
-                        {
-                            command.Parameters.Add(sqlParameter);
-                        }
-
-                        SQLiteDataReader reader = null;
-
-                        DatabaseCommandTask task =
-                            new DatabaseCommandTask(command);
-                        try
-                        {
-                            Thread t1 = new Thread(new ThreadStart(task.ThreadMain));
-                            t1.Start();
-                            bool bRet;
-                            while (true)
-                            {
-                                if (handle != null)  //只是不再检索了
-                                {
-                                    if (handle.DoIdle() == false)
-                                    {
-                                        command = null; // 这里不要Dispose() 丢给线程 task.ThreadMain 去Dispose()
-                                        connection = null;
-                                        reader = null;
-                                        task.Cancel();
-                                        strError = "用户中断";
-                                        return -1;
-                                    }
-                                }
-                                bRet = task.m_event.WaitOne(100, false);  //millisecondsTimeout
-                                if (bRet == true)
-                                    break;
-                            }
-                            if (task.bError == true)
-                            {
-                                strError = task.ErrorString;
-                                return -1;
-                            }
-
-                            if (task.DataReader == null)
-                                return 0;
-
-                            reader = (SQLiteDataReader)task.DataReader;
-                            if (reader.HasRows == false)
-                            {
-                                return 0;
-                            }
-
-                            int nLoopCount = 0;
-                            while (reader.Read())
-                            {
-                                if (nLoopCount % 10000 == 0)
-                                {
-                                    if (handle != null)
-                                    {
-                                        if (handle.DoIdle() == false)
-                                        {
-                                            strError = "用户中断";
-                                            return -1;
-                                        }
-                                    }
-                                }
-
-                                string strID = ((string)reader[0]);
-                                if (strID.Length != 10)
-                                {
-                                    strError = "结果集中出现了长度不是10位的记录号，不正常";
-                                    return -1;
-                                }
-
-#if NO
-                        string strId = this.FullID + "/" + strID;   //记录路径格式：库ID/记录号
-                        resultSet.Add(new DpRecord(strId));
-#endif
-                                if (bOutputKeyCount == true)
-                                {
-                                    DpRecord dprecord = new DpRecord((string)reader[0]);
-                                    dprecord.Index = 1;
-                                    resultSet.Add(dprecord);
-                                }
-                                else if (bOutputKeyID == true)
-                                {
-                                    // datareader key, id
-                                    // 结果集格式 key, path
-                                    string strKey = (string)reader[0];
-                                    string strId = this.FullID + "/" + (string)reader[1]; // 格式为：库id/记录号
-                                    string strFrom = (string)reader[2];
-                                    DpRecord record = new DpRecord(strId);
-                                    // new DpRecord(strKey + "," + strId)
-                                    record.BrowseText = strKey + new string(DpResultSetManager.FROM_LEAD, 1) + strFrom;
-                                    resultSet.Add(record);
-                                }
-                                else
-                                {
-                                    string strId = "";
-                                    strId = this.FullID + "/" + (string)reader[0]; // 记录格式为：库id/记录号
-                                    resultSet.Add(new DpRecord(strId));
-                                }
-
-                                nLoopCount++;
-
-                                if (nLoopCount % 100 == 0)
-                                    Thread.Sleep(1);
-                            }
-                        }
-                        finally
-                        {
-                            if (// task != null && 
-                                reader != null)
-                                reader.Close();
-                            if (task != null)
-                                task.Dispose();
-                        }
-                    } // end of using command
-                    finally
-                    {
-                        if (command != null)
-                            command.Dispose();
-                    }
                 }
                 else if (connection.SqlServerType == SqlServerType.MySql)
                 {
                     // strCommand = "SELECT id FROM records WHERE id LIKE '__________' ";
-                    MySqlCommand command = new MySqlCommand(strCommand,
+                    command = new MySqlCommand(strCommand,
                         connection.MySqlConnection);
-                    try
-                    {
-                        command.CommandTimeout = 20 * 60;  // 把检索时间变大
-                        foreach (MySqlParameter sqlParameter in aSqlParameter)
-                        {
-                            command.Parameters.Add(sqlParameter);
-                        }
-
-                        IAsyncResult r = command.BeginExecuteReader(CommandBehavior.CloseConnection);
-                        while (true)
-                        {
-                            if (handle != null)
-                            {
-                                if (handle.DoIdle() == false)
-                                {
-                                    command.Cancel();
-                                    try
-                                    {
-                                        command.EndExecuteReader(r);
-                                    }
-                                    catch
-                                    {
-                                    }
-                                    strError = "用户中断";
-                                    return -1;
-                                }
-                            }
-                            else
-                                break;
-
-                            bool bRet = r.AsyncWaitHandle.WaitOne(100, false);  //millisecondsTimeout
-                            if (bRet == true)
-                                break;
-                        }
-
-                        MySqlDataReader reader = command.EndExecuteReader(r);
-                        try
-                        {
-                            if (reader == null
-                                || reader.HasRows == false)
-                            {
-                                return 0;
-                            }
-
-                            int nLoopCount = 0;
-                            while (reader.Read())
-                            {
-                                if (nLoopCount % 10000 == 0)
-                                {
-                                    if (handle != null)
-                                    {
-                                        if (handle.DoIdle() == false)
-                                        {
-                                            strError = "用户中断";
-                                            return -1;
-                                        }
-                                    }
-                                }
-
-                                string strID = ((string)reader[0]);
-                                if (strID.Length != 10)
-                                {
-                                    strError = "结果集中出现了长度不是10位的记录号，不正常";
-                                    return -1;
-                                }
-
-                                if (bOutputKeyCount == true)
-                                {
-                                    DpRecord dprecord = new DpRecord((string)reader[0]);
-                                    dprecord.Index = 1;
-                                    resultSet.Add(dprecord);
-                                }
-                                else if (bOutputKeyID == true)
-                                {
-                                    // datareader key, id
-                                    // 结果集格式 key, path
-                                    string strKey = (string)reader[0];
-                                    string strId = this.FullID + "/" + (string)reader[1]; // 格式为：库id/记录号
-                                    string strFrom = (string)reader[2];
-                                    DpRecord record = new DpRecord(strId);
-                                    // new DpRecord(strKey + "," + strId)
-                                    record.BrowseText = strKey + new string(DpResultSetManager.FROM_LEAD, 1) + strFrom;
-                                    resultSet.Add(record);
-                                }
-                                else
-                                {
-                                    string strId = "";
-                                    strId = this.FullID + "/" + (string)reader[0]; // 记录格式为：库id/记录号
-                                    resultSet.Add(new DpRecord(strId));
-                                }
-
-                                nLoopCount++;
-
-                                if (nLoopCount % 100 == 0)
-                                    Thread.Sleep(1);
-                            }
-                        }
-                        finally
-                        {
-                            if (reader != null)
-                                reader.Close();
-                        }
-                    } // end of using command
-                    finally
-                    {
-                        if (command != null)
-                            command.Dispose();
-                    }
                 }
                 else if (connection.SqlServerType == SqlServerType.Oracle)
                 {
                     // strCommand = "SELECT id FROM records WHERE id LIKE '__________' ";
-                    OracleCommand command = new OracleCommand(strCommand,
+                    command = new OracleCommand(strCommand,
                         connection.OracleConnection);
-                    try
-                    {
-                        command.BindByName = true;
-                        command.CommandTimeout = 20 * 60;  // 把检索时间变大
-                        foreach (OracleParameter sqlParameter in aSqlParameter)
-                        {
-                            command.Parameters.Add(sqlParameter);
-                        }
-
-                        OracleDataReader reader = null;
-
-                        DatabaseCommandTask task =
-                            new DatabaseCommandTask(command);
-                        try
-                        {
-                            Thread t1 = new Thread(new ThreadStart(task.ThreadMain));
-                            t1.Start();
-                            bool bRet;
-                            while (true)
-                            {
-                                if (handle != null)  //只是不再检索了
-                                {
-                                    if (handle.DoIdle() == false)
-                                    {
-                                        command = null; // 这里不要Dispose() 丢给线程 task.ThreadMain 去Dispose()
-                                        connection = null;
-                                        reader = null;
-                                        task.Cancel();
-                                        strError = "用户中断";
-                                        return -1;
-                                    }
-                                }
-                                bRet = task.m_event.WaitOne(100, false);  //millisecondsTimeout
-                                if (bRet == true)
-                                    break;
-                            }
-                            if (task.bError == true)
-                            {
-                                strError = task.ErrorString;
-                                return -1;
-                            }
-
-                            if (task.DataReader == null)
-                                return 0;
-
-                            reader = (OracleDataReader)task.DataReader;
-                            if (reader.HasRows == false)
-                            {
-                                return 0;
-                            }
-
-                            int nLoopCount = 0;
-                            while (reader.Read())
-                            {
-                                if (nLoopCount % 10000 == 0)
-                                {
-                                    if (handle != null)
-                                    {
-                                        if (handle.DoIdle() == false)
-                                        {
-                                            strError = "用户中断";
-                                            return -1;
-                                        }
-                                    }
-                                }
-
-                                string strID = ((string)reader[0]);
-                                if (strID.Length != 10)
-                                {
-                                    strError = "结果集中出现了长度不是10位的记录号，不正常";
-                                    return -1;
-                                }
-
-                                if (bOutputKeyCount == true)
-                                {
-                                    DpRecord dprecord = new DpRecord((string)reader[0]);
-                                    dprecord.Index = 1;
-                                    resultSet.Add(dprecord);
-                                }
-                                else if (bOutputKeyID == true)
-                                {
-                                    // datareader key, id
-                                    // 结果集格式 key, path
-                                    string strKey = (string)reader[0];
-                                    string strId = this.FullID + "/" + (string)reader[1]; // 格式为：库id/记录号
-                                    string strFrom = (string)reader[2];
-                                    DpRecord record = new DpRecord(strId);
-                                    // new DpRecord(strKey + "," + strId)
-                                    record.BrowseText = strKey + new string(DpResultSetManager.FROM_LEAD, 1) + strFrom;
-                                    resultSet.Add(record);
-                                }
-                                else
-                                {
-                                    string strId = "";
-                                    strId = this.FullID + "/" + (string)reader[0]; // 记录格式为：库id/记录号
-                                    resultSet.Add(new DpRecord(strId));
-                                }
-
-                                nLoopCount++;
-
-                                if (nLoopCount % 100 == 0)
-                                    Thread.Sleep(1);
-                            }
-                        }
-                        finally
-                        {
-                            if (// task != null && 
-                                reader != null)
-                                reader.Close();
-                            if (task != null)
-                                task.Dispose();
-                        }
-                    } // end of using command
-                    finally
-                    {
-                        if (command != null)
-                            command.Dispose();
-                    }
+                    ((OracleCommand)command).BindByName = true;
                 }
+                else
+                    throw new ArgumentException("未知的 connection.SqlServerType '" + connection.SqlServerType.ToString() + "'");
+
+                // ****
+                using (command)
+                {
+                    command.CommandTimeout = 20 * 60;  // 把检索时间变大
+                    foreach (DbParameter sqlParameter in aSqlParameter)
+                    {
+                        command.Parameters.Add(sqlParameter);
+                    }
+
+                    var reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection,
+handle.CancelTokenSource.Token).Result;
+
+
+                    // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                    // return:
+                    //      -1  出错
+                    //      0   没有填入任何记录
+                    //      >0  实际填入的记录条数
+                    int nRet = FillResultSet(
+                            handle,
+                            reader,
+                            resultSet,
+                            searchItem.MaxCount,
+                            GetOutputStyle(strOutputStyle),
+                            true,
+                            out strError);
+                    if (nRet == -1 || nRet == 0)
+                        return nRet;
+                } // end of using command
             }
             catch (SqlException sqlEx)
             {
@@ -3880,22 +3592,255 @@ namespace DigitalPlatform.rms
                 if (connection != null)
                     connection.Close();
             }
+#endif
             return 0;
         }
 
+        internal enum OutputStyle
+        {
+            KeyCount = 1,
+            KeyID = 2,
+            ID = 3,
+        }
+
+        int ExecuteQueryFillResultSet(
+    ChannelHandle handle,
+    string strCommand,
+    List<DbParameter> aSqlParameter,
+    DpResultSet resultSet,
+    int nMaxCount,
+    OutputStyle style,
+    bool bRecordTable,
+    out string strError)
+        {
+            strError = "";
+
+            Connection connection = null;
+
+#if NO
+            SQLiteConnection lite_connection = null;
+            if (this.container.SqlServerType == SqlServerType.SQLite)
+            {
+                // SQLite 采用保守连接
+                lite_connection =
+                    new SQLiteConnection(this.m_strConnString/*Pooling*/);
+                // connection.Open();
+                Open(lite_connection);
+            }
+            else
+#endif
+            {
+                connection = new Connection(this,
+    this.m_strConnString);
+                connection.TryOpen();
+            }
+            try
+            {
+                DbCommand command = null;
+
+                if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                {
+                    command = new SqlCommand(strCommand,
+                    connection.SqlConnection);
+                }
+                else if (this.container.SqlServerType == SqlServerType.SQLite)
+                {
+                    command = new SQLiteCommand(strCommand,
+                    connection.SQLiteConnection
+                    //lite_connection
+                    );
+                }
+                else if (this.container.SqlServerType == SqlServerType.MySql)
+                {
+                    command = new MySqlCommand(strCommand,
+                    connection.MySqlConnection);
+                }
+                else if (this.container.SqlServerType == SqlServerType.Oracle)
+                {
+                    command = new OracleCommand(strCommand,
+                         connection.OracleConnection);
+                    ((OracleCommand)command).BindByName = true;
+                }
+                else
+                    throw new ArgumentException("未知的 connection.SqlServerType '" + connection.SqlServerType.ToString() + "'");
+
+                // ****
+                using (command)
+                {
+                    foreach (DbParameter sqlParameter in aSqlParameter)
+                    {
+                        command.Parameters.Add(sqlParameter);
+                    }
+                    command.CommandTimeout = 20 * 60;  // 把检索时间变大
+
+                    DbDataReader reader = null;
+                    if (handle != null && handle.CancelTokenSource != null)
+                        reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection
+    , handle.CancelTokenSource.Token
+    ).Result;
+                    else
+                        reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection
+).Result;
+
+#if NO
+                    // 尝试一下不用 CancellationToken。因为怀疑这样用会导致触发 Cancel 的时候让 MySQL Driver 代码死锁
+                    DbDataReader reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection
+).Result;
+#endif
+
+                    // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                    // return:
+                    //      -1  出错
+                    //      0   没有填入任何记录
+                    //      >0  实际填入的记录条数
+                    int nRet = FillResultSet(
+                            handle,
+                            reader,
+                            resultSet,
+                            nMaxCount,
+                            style,  // GetOutputStyle(strOutputStyle),
+                            bRecordTable,
+                            out strError);
+                    if (nRet == -1 || nRet == 0)
+                        return nRet;
+                } // end of using command
+
+                return 0;
+            }
+            catch (SqlException sqlEx)
+            {
+                strError = GetSqlErrors(sqlEx);
+                return -1;
+            }
+            catch (Exception ex)
+            {
+                strError = "SearchByUnion() exception: " + ExceptionUtil.GetDebugText(ex);
+                return -1;
+            }
+            finally // 连接
+            {
+                if (connection != null)
+                    connection.Close();
+                //if (lite_connection != null)
+                //    lite_connection.Close();
+            }
+        }
+
+        // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+        // parameters:
+        //      bRecordTable    是否为从 record 表中 select 出来的结果？(否则就是 keys 表)
+        // return:
+        //      -1  出错
+        //      0   没有填入任何记录
+        //      >0  实际填入的记录条数
+        int FillResultSet(
+        ChannelHandle handle,
+        DbDataReader reader,
+        DpResultSet resultSet,
+        int nMaxCount,
+        OutputStyle style,
+        bool bRecordTable,
+        out string strError)
+        {
+            strError = "";
+
+            try
+            {
+                if (reader == null
+                    || reader.HasRows == false)
+                    return 0;
+
+                CancellationToken token;
+                if (handle != null & handle.CancelTokenSource != null)
+                    token = handle.CancelTokenSource.Token;
+
+                int nGetedCount = 0;
+                while (reader.Read())
+                {
+#if NO
+                                    if (handle != null
+                                        && (nGetedCount % 10000) == 0)
+                                    {
+                                        if (handle.DoIdle() == false)
+                                        {
+                                            strError = "用户中断";
+                                            return -1;
+                                        }
+                                    }
+#endif
+                    if (token.IsCancellationRequested)
+                    {
+                        strError = "用户中断";
+                        return -1;
+                    }
+
+                    string strFirstColumn = ((string)reader[0]);
+#if NO              // 为提高速度，不做这个判断了
+                    if (bRecordTable && strFirstColumn.Length != 10)
+                    {
+                        strError = "结果集中出现了长度不是 10 位的记录号 '" + strFirstColumn + "'，不正常";
+                        return -1;
+                    }
+#endif
+
+                    if (style == OutputStyle.KeyCount)
+                    {
+                        DpRecord dprecord = new DpRecord(strFirstColumn);
+                        dprecord.Index = bRecordTable ? 1 : (int)reader.GetInt32(1);
+                        resultSet.Add(dprecord);
+                    }
+                    else if (style == OutputStyle.KeyID)
+                    {
+                        // datareader key, id
+                        // 结果集格式 key, path
+                        string strKey = strFirstColumn;
+                        string strId = this.FullID + "/" + (string)reader[1]; // 格式为：库id/记录号
+                        string strFrom = (string)reader[2];
+                        DpRecord record = new DpRecord(strId);
+                        record.BrowseText = strKey + new string(DpResultSetManager.FROM_LEAD, 1) + strFrom;
+                        resultSet.Add(record);
+                    }
+                    else
+                    {
+                        string strId = "";
+                        strId = this.FullID + "/" + strFirstColumn; // 记录格式为：库id/记录号
+                        resultSet.Add(new DpRecord(strId));
+                    }
+
+                    nGetedCount++;
+
+                    // 超过最大数了
+                    if (nMaxCount != -1
+                        && nGetedCount >= nMaxCount)
+                        break;
+
+                    // Thread.Sleep(0);
+                    if (nGetedCount % 100 == 0)
+                        Thread.Sleep(1);
+                }
+
+                return nGetedCount;
+            }
+            finally
+            {
+                if (reader != null)
+                    reader.Close();
+            }
+        }
+
         /*
-<target list="中文图书实体:册条码号">
-    <item>
+        <target list="中文图书实体:册条码号">
+        <item>
         <word>00000335,00000903</word>
         <match>exact</match>
         <relation>list</relation>
         <dataType>string</dataType>
-    </item>
-    <lang>zh</lang>
-</target>         * */
+        </item>
+        <lang>zh</lang>
+        </target>         * */
         int ProcessList(
             string strWordList,
-            ref List<object> aSqlParameter,
+            ref List<DbParameter> aSqlParameter,
             out string strKeyCondition,
             out string strError)
         {
@@ -3968,7 +3913,7 @@ namespace DigitalPlatform.rms
             XmlNode nodeConvertQueryString,
             XmlNode nodeConvertQueryNumber,
             string strPostfix,
-            ref List<object> aSqlParameter,
+            ref List<DbParameter> aSqlParameter,
             out string strKeyCondition,
             out string strError)
         {
@@ -4463,6 +4408,18 @@ namespace DigitalPlatform.rms
             return 0;
         }
 
+        static OutputStyle GetOutputStyle(string strOutputStyle)
+        {
+            if (StringUtil.IsInList("keycount", strOutputStyle))
+                return OutputStyle.KeyCount;
+            if (StringUtil.IsInList("keyid", strOutputStyle))
+                return OutputStyle.KeyID;
+            return OutputStyle.ID;
+        }
+
+#if NO
+        // 老版本
+        // TODO: 检索中途可以考虑给 handle 挂一个事件，事件触发的时候，主动去关闭 sqlreader
         // 检索
         // parameters:
         //      searchItem  SearchItem对象，存放检索词等信息
@@ -4541,7 +4498,7 @@ namespace DigitalPlatform.rms
                 string strCommand = "";
 
                 // Sql命令参数数组
-                List<object> aSqlParameter = new List<object>();
+                List<DbParameter> aSqlParameter = new List<DbParameter>();
 
                 string strColumnList = "";
 
@@ -4667,14 +4624,14 @@ namespace DigitalPlatform.rms
                         if (this.container.SqlServerType == SqlServerType.Oracle)
                         {
                             strOneCommand =
-    " SELECT "
-    + strDistinct
-    + strTop
-                                // + " idstring" + strSelectKeystring + " "
-    + strColumnList
-    + " FROM " + strTableName + " "
-    + strWhere
-    + strGroupBy;
+        " SELECT "
+        + strDistinct
+        + strTop
+        // + " idstring" + strSelectKeystring + " "
+        + strColumnList
+        + " FROM " + strTableName + " "
+        + strWhere
+        + strGroupBy;
                             if (string.IsNullOrEmpty(strLimit) == false)
                             {
                                 // 注：如果要在有限制数的情况下确保命中靠前的条目，需要采用 select * from ( 办法
@@ -4705,13 +4662,13 @@ namespace DigitalPlatform.rms
                         if (this.container.SqlServerType == SqlServerType.Oracle)
                         {
                             strOneCommand = " SELECT "
-    + strDistinct
-    + strTop
-                                // + " idstring" + strSelectKeystring + " "  //DISTINCT 去重
-    + strColumnList
-    + " FROM " + strTableName + " "
-    + strWhere
-    + strGroupBy;
+        + strDistinct
+        + strTop
+        // + " idstring" + strSelectKeystring + " "  //DISTINCT 去重
+        + strColumnList
+        + " FROM " + strTableName + " "
+        + strWhere
+        + strGroupBy;
                             if (string.IsNullOrEmpty(strLimit) == false)
                             {
                                 // 注：如果要在有限制数的情况下确保命中靠前的条目，需要采用 select * from ( 办法
@@ -4779,7 +4736,6 @@ namespace DigitalPlatform.rms
                  * UNION select  '', id, 'batchno' from records where id like '__________' and id not in ( SELECT  DISTINCT  idstring  FROM keys_batchno )
                  * */
 
-
                 string strOrderBy = "";
                 if (string.IsNullOrEmpty(searchItem.OrderBy) == false)
                 {
@@ -4818,12 +4774,12 @@ namespace DigitalPlatform.rms
                     {
                         if (string.IsNullOrEmpty(strLimit) == false)
                             strCommand = "SELECT * FROM (" + strCommand + ") "
-    + strOrderBy    // 2012/3/30
-    + strLimit;
+        + strOrderBy    // 2012/3/30
+        + strLimit;
                         else
                             strCommand = "select * FROM (" + strCommand + ") "
-+ strOrderBy    // 2012/3/30
-;
+        + strOrderBy    // 2012/3/30
+        ;
                     }
                     else
                     {
@@ -4832,7 +4788,7 @@ namespace DigitalPlatform.rms
                             strCommand = InsertTopPart(strCommand, strTop);
 
                         if (string.IsNullOrEmpty(strLimit) == false
-    || string.IsNullOrEmpty(strOrderBy) == false)
+        || string.IsNullOrEmpty(strOrderBy) == false)
                             strCommand = strCommand
         + strOrderBy
         + strLimit;
@@ -4960,6 +4916,25 @@ namespace DigitalPlatform.rms
                             }
                             command.CommandTimeout = 20 * 60;  // 把检索时间变大
 
+                            var reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection,
+handle.CancelTokenSource.Token).Result;
+
+                            // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                            // return:
+                            //      -1  出错
+                            //      0   没有填入任何记录
+                            //      >0  实际填入的记录条数
+                            nRet = FillResultSet(
+                                handle,
+                                reader,
+                                resultSet,
+                                searchItem.MaxCount,
+                                GetOutputStyle(strOutputStyle),
+                                false,
+                                out strError);
+                            if (nRet == -1 || nRet == 0)
+                                return nRet;
+#if NO
                             IAsyncResult r = command.BeginExecuteReader(CommandBehavior.CloseConnection);
                             while (true)
                             {
@@ -5051,6 +5026,7 @@ namespace DigitalPlatform.rms
                                 if (reader != null)
                                     reader.Close();
                             }
+#endif
                         } // end of using command
                         finally
                         {
@@ -5102,6 +5078,26 @@ namespace DigitalPlatform.rms
                                 command.Parameters.Add(sqlParameter);
                             }
                             command.CommandTimeout = 20 * 60;  // 把检索时间变大
+
+                            var reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection,
+    handle.CancelTokenSource.Token).Result;
+
+                            // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                            // return:
+                            //      -1  出错
+                            //      0   没有填入任何记录
+                            //      >0  实际填入的记录条数
+                            nRet = FillResultSet(
+                                handle,
+                                reader,
+                                resultSet,
+                                searchItem.MaxCount,
+                                GetOutputStyle(strOutputStyle),
+                                false,
+                                out strError);
+                            if (nRet == -1 || nRet == 0)
+                                return nRet;
+#if NO
                             SQLiteDataReader reader = null;
 
                             // 调新线程处理
@@ -5207,6 +5203,7 @@ namespace DigitalPlatform.rms
                                 if (task != null)
                                     task.Dispose();
                             }
+#endif
                         } // end of using command
                         finally
                         {
@@ -5258,6 +5255,10 @@ namespace DigitalPlatform.rms
                             }
                             command.CommandTimeout = 20 * 60;  // 把检索时间变大
 
+                            var reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection,
+                                handle.CancelTokenSource.Token).Result;
+
+#if NO
                             IAsyncResult r = command.BeginExecuteReader(CommandBehavior.CloseConnection);
                             while (true)
                             {
@@ -5291,6 +5292,24 @@ namespace DigitalPlatform.rms
                             }
 
                             MySqlDataReader reader = command.EndExecuteReader(r);
+#endif
+
+                            // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                            // return:
+                            //      -1  出错
+                            //      0   没有填入任何记录
+                            //      >0  实际填入的记录条数
+                            nRet = FillResultSet(
+                                handle,
+                                reader,
+                                resultSet,
+                                searchItem.MaxCount,
+                                GetOutputStyle(strOutputStyle),
+                                false,
+                                out strError);
+                            if (nRet == -1 || nRet == 0)
+                                return nRet;
+#if NO
                             try
                             {
                                 if (reader == null
@@ -5302,6 +5321,7 @@ namespace DigitalPlatform.rms
                                 int nGetedCount = 0;
                                 while (reader.Read())
                                 {
+#if NO
                                     if (handle != null
                                         && (nGetedCount % 10000) == 0)
                                     {
@@ -5310,6 +5330,13 @@ namespace DigitalPlatform.rms
                                             strError = "用户中断";
                                             return -1;
                                         }
+                                    }
+#endif
+                                    if (handle != null 
+                                        && handle.CancelTokenSource.IsCancellationRequested)
+                                    {
+                                        strError = "用户中断";
+                                        return -1;
                                     }
 
                                     if (bOutputKeyCount == true)
@@ -5345,7 +5372,9 @@ namespace DigitalPlatform.rms
                                         && nGetedCount >= searchItem.MaxCount)
                                         break;
 
-                                    Thread.Sleep(0);
+                                    // Thread.Sleep(0);
+                                    if (nGetedCount % 100 == 0)
+                                        Thread.Sleep(1);
                                 }
                             }
                             finally
@@ -5353,13 +5382,14 @@ namespace DigitalPlatform.rms
                                 if (reader != null)
                                     reader.Close();
                             }
+
+#endif
                         }
                         finally
                         {
                             if (command != null)
                                 command.Dispose();
                         }
-
                     }
                     catch (SqlException sqlEx)
                     {
@@ -5403,6 +5433,26 @@ namespace DigitalPlatform.rms
                                 command.Parameters.Add(sqlParameter);
                             }
                             command.CommandTimeout = 20 * 60;  // 把检索时间变大
+
+                            var reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection,
+handle.CancelTokenSource.Token).Result;
+
+                            // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                            // return:
+                            //      -1  出错
+                            //      0   没有填入任何记录
+                            //      >0  实际填入的记录条数
+                            nRet = FillResultSet(
+                                handle,
+                                reader,
+                                resultSet,
+                                searchItem.MaxCount,
+                                GetOutputStyle(strOutputStyle),
+                                false,
+                                out strError);
+                            if (nRet == -1 || nRet == 0)
+                                return nRet;
+#if NO
                             OracleDataReader reader = null;
 
                             // 调新线程处理
@@ -5508,7 +5558,7 @@ namespace DigitalPlatform.rms
                                 if (task != null)
                                     task.Dispose();
                             }
-
+#endif
                         }
                         finally
                         {
@@ -5536,6 +5586,606 @@ namespace DigitalPlatform.rms
                         }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                strError = "1: " + ExceptionUtil.GetDebugText(ex);
+                return -1;
+            }
+            finally
+            {
+
+                //*****************对数据库解读锁***************
+                m_db_lock.ReleaseReaderLock();
+#if DEBUG_LOCK_SQLDATABASE
+				this.container.WriteDebugInfo("SearchByUnion()，对'" + this.GetCaption("zh-CN") + "'数据库解读锁。");
+#endif
+
+                // 2006/12/18 changed
+
+                TimeSpan delta = DateTime.Now - start_time;
+                Debug.WriteLine("SearchByUnion耗时 " + delta.ToString());
+            }
+
+            if (bNeedSort == true)
+                return 1;
+
+            return 0;
+        }
+#endif
+
+        // 新版本
+        // TODO: 检索中途可以考虑给 handle 挂一个事件，事件触发的时候，主动去关闭 sqlreader
+        // 检索
+        // parameters:
+        //      searchItem  SearchItem对象，存放检索词等信息
+        //      isConnected 连接对象
+        //      resultSet   结果集对象，存放命中记录。本函数并不在检索前清空结果集，因此，对同一结果集对象多次执行本函数，则可以把命中结果追加在一起
+        //      strLang     语言版本，
+        // return:
+        //		-1	出错
+        //		0	成功
+        //      1   成功，但resultset需要再行排序一次
+        internal override int SearchByUnion(
+            string strOutputStyle,
+            SearchItem searchItem,
+            ChannelHandle handle,
+            // Delegate_isConnected isConnected,
+            DpResultSet resultSet,
+            int nWarningLevel,
+            out string strError,
+            out string strWarning)
+        {
+            strError = "";
+            strWarning = "";
+
+            bool bOutputKeyCount = StringUtil.IsInList("keycount", strOutputStyle);
+            bool bOutputKeyID = StringUtil.IsInList("keyid", strOutputStyle);
+
+            bool bNeedSort = false;
+
+            DateTime start_time = DateTime.Now;
+
+            //**********对数据库加读锁**************
+            m_db_lock.AcquireReaderLock(m_nTimeOut);
+#if DEBUG_LOCK_SQLDATABASE
+			this.container.WriteDebugInfo("SearchByUnion()，对'" + this.GetCaption("zh-CN") + "'数据库加读锁。");
+#endif
+            // 2006/12/18 changed
+
+            try
+            {
+                bool bHasID = false;
+                List<TableInfo> aTableInfo = null;
+                int nRet = this.TableNames2aTableInfo(searchItem.TargetTables,
+                    out bHasID,
+                    out aTableInfo,
+                    out strError);
+                if (nRet == -1)
+                    return -1;
+
+                // TODO: ***注意：如果若干检索途径中有了__id,那么就只有这一个有效，而其他的就无效了。这似乎需要改进。2007/9/13
+
+                if (bHasID == true)
+                {
+                    nRet = SearchByID(searchItem,
+                        handle,
+                        // isConnected,
+                        resultSet,
+                        strOutputStyle,
+                        out strError);
+                    if (nRet == -1)
+                        return -1;
+                }
+
+                // 对sql库来说,通过ID检索后，记录已排序，去重
+                if (aTableInfo == null || aTableInfo.Count == 0)
+                    return 0;
+
+                // 2009/8/5 
+                bool bSearchNull = false;   // 是否为空值检索
+                if (searchItem.Match == "exact"
+                    && searchItem.Relation == "="
+                    && String.IsNullOrEmpty(searchItem.Word) == true)
+                {
+                    bSearchNull = true;
+                }
+
+                string strCommand = "";
+
+                // Sql命令参数数组
+                List<DbParameter> aSqlParameter = new List<DbParameter>();
+
+                string strColumnList = "";
+
+                if (bOutputKeyCount == true
+                    && bSearchNull == false)    // 2009/8/6 
+                {
+                    strColumnList = " keystring, count(*) ";
+                }
+                else if (bOutputKeyID == true
+                    && bSearchNull == false)    // 2010/5/12 
+                {
+                    strColumnList = " keystring, idstring, fromstring ";
+                }
+                else
+                {
+                    // 当bSearchNull==true的时候，column list应当和bOutputKeysCount == false时候一样
+
+                    string strSelectKeystring = "";
+                    if (searchItem.KeyOrder != "")
+                    {
+                        if (aTableInfo.Count > 1)
+                            strSelectKeystring = ",keystring";
+                    }
+
+                    strColumnList = " idstring" + strSelectKeystring + " ";
+                }
+
+                // 循环每一个检索途径
+                for (int i = 0; i < aTableInfo.Count; i++)
+                {
+                    TableInfo tableInfo = aTableInfo[i];
+
+                    // 2015/8/25
+                    string strFromValue = "";
+                    strFromValue = KeysCfg.GetFromValue(tableInfo.Node as XmlElement);
+
+                    // 参数名的后缀
+                    string strPostfix = Convert.ToString(i);
+
+                    string strConditionAboutKey = "";
+                    try
+                    {
+                        nRet = GetKeyCondition(
+                            searchItem,
+                            tableInfo.nodeConvertQueryString,
+                            tableInfo.nodeConvertQueryNumber,
+                            strPostfix,
+                            ref aSqlParameter,
+                            out strConditionAboutKey,
+                            out strError);
+                        if (nRet == -1)
+                            return -1;
+                        if (this.container.SqlServerType == SqlServerType.Oracle)
+                        {
+                            strConditionAboutKey = strConditionAboutKey.Replace("@", ":");
+                        }
+                    }
+                    catch (NoMatchException ex)
+                    {
+                        strWarning = ex.Message;
+                        strError = strWarning;
+                        return -1;
+                    }
+
+                    // 如果限制了一个最大数，则按每个途径都是这个最大数算
+                    string strTop = "";
+                    string strLimit = "";
+
+                    if (bSearchNull == false)
+                    {
+                        if (searchItem.MaxCount != -1)  //限制的最大数
+                        {
+                            if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                                strTop = " TOP " + Convert.ToString(searchItem.MaxCount) + " ";
+                            else if (this.container.SqlServerType == SqlServerType.SQLite)
+                                strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                            else if (this.container.SqlServerType == SqlServerType.MySql)
+                                strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                            else if (this.container.SqlServerType == SqlServerType.Oracle)
+                                strLimit = " rownum <= " + Convert.ToString(searchItem.MaxCount) + " ";
+                            else
+                                throw new Exception("未知的 SqlServerType");
+                        }
+                    }
+
+                    string strWhere = "";
+
+                    if (bSearchNull == false)
+                    {
+                        if (strConditionAboutKey != "")
+                            strWhere = " WHERE " + strConditionAboutKey;
+                    }
+
+                    string strDistinct = " DISTINCT ";
+                    string strGroupBy = "";
+                    if (bOutputKeyCount == true
+                        && bSearchNull == false)
+                    {
+                        strDistinct = "";
+                        strGroupBy = " GROUP BY keystring";
+                    }
+
+                    string strTableName = tableInfo.SqlTableName;
+                    if (this.container.SqlServerType == SqlServerType.Oracle)
+                    {
+                        strTableName = this.m_strSqlDbName + "_" + tableInfo.SqlTableName;
+                    }
+
+                    string strOneCommand = "";
+                    if (i == 0)// 第一个表
+                    {
+                        strOneCommand =
+                            " SELECT "
+                            + strDistinct
+                            + strTop
+                            // + " idstring" + strSelectKeystring + " "
+                            + strColumnList
+                            + " FROM " + strTableName + " "
+                            + strWhere
+                            + strGroupBy
+                            + (i == aTableInfo.Count - 1 ? strLimit : "");
+
+                        if (this.container.SqlServerType == SqlServerType.Oracle)
+                        {
+                            strOneCommand =
+        " SELECT "
+        + strDistinct
+        + strTop
+        // + " idstring" + strSelectKeystring + " "
+        + strColumnList
+        + " FROM " + strTableName + " "
+        + strWhere
+        + strGroupBy;
+                            if (string.IsNullOrEmpty(strLimit) == false)
+                            {
+                                // 注：如果要在有限制数的情况下确保命中靠前的条目，需要采用 select * from ( 办法
+                                if (string.IsNullOrEmpty(strGroupBy) == false)
+                                    strOneCommand = " SELECT * FROM ("
+                                        + strOneCommand
+                                        + ") WHERE " + strLimit;
+                                else
+                                {
+                                    strOneCommand = strOneCommand
+                                        + (string.IsNullOrEmpty(strWhere) == false ? " AND " : " ")
+                                        + strLimit;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        strOneCommand = " SELECT "  // union
+                            + strDistinct
+                            + strTop
+                            // + " idstring" + strSelectKeystring + " "  //DISTINCT 去重
+                            + strColumnList
+                            + " FROM " + strTableName + " "
+                            + strWhere
+                            + strGroupBy
+                            + (i == aTableInfo.Count - 1 ? strLimit : "");
+                        if (this.container.SqlServerType == SqlServerType.Oracle)
+                        {
+                            strOneCommand = " SELECT "
+        + strDistinct
+        + strTop
+        // + " idstring" + strSelectKeystring + " "  //DISTINCT 去重
+        + strColumnList
+        + " FROM " + strTableName + " "
+        + strWhere
+        + strGroupBy;
+                            if (string.IsNullOrEmpty(strLimit) == false)
+                            {
+                                // 注：如果要在有限制数的情况下确保命中靠前的条目，需要采用 select * from ( 办法
+                                if (string.IsNullOrEmpty(strGroupBy) == false)
+                                    strOneCommand = " SELECT * FROM ("
+                                    + strOneCommand
+                                    + ") WHERE " + strLimit;
+                                else
+                                {
+                                    strOneCommand = strOneCommand
+                                        + (string.IsNullOrEmpty(strWhere) == false ? " AND " : " ")
+                                        + strLimit;
+                                }
+
+                            }
+
+                            // strOneCommand = " union " + strOneCommand;
+                        }
+                    }
+
+                    if (bSearchNull == true)
+                    {
+                        string strColumns = " id ";
+                        if (bOutputKeyCount == true)
+                        {
+                            if (bSearchNull == true)
+                                strColumns = " '', count(*) ";  // 2015/8/25
+                            else
+                                strColumns = " keystring='', count(*) ";
+                        }
+                        else if (bOutputKeyID == true)
+                        {
+                            if (bSearchNull == true)
+                            {
+                                // strColumns = " '', id, 'recid' ";  // 2015/8/25 TODO 第三列内容应该根据 tablename 翻译得到
+                                strColumns = " '', id, '"
+                                    + (string.IsNullOrEmpty(strFromValue) == false ? strFromValue : "recid")
+                                    + "' ";// 2015/8/25 
+                            }
+                            else
+                                strColumns = " keystring=id, id, fromstring='recid' ";   // fromstring='' 2011/7/24
+                        }
+
+                        {
+                            strOneCommand = "select "
+        + strColumns // " id "
+        + "from records where id like '__________' and id not in (" + strOneCommand + ") "
+        ;
+                        }
+
+                    }
+
+                    if (i == 0)
+                        strCommand += strOneCommand;
+                    else
+                        strCommand += " union " + strOneCommand;
+
+                }
+
+
+                /*
+                 * select  '', id, 'barcode' from records where id like '__________' and id not in ( SELECT  DISTINCT  idstring  FROM keys_barcode  union SELECT  DISTINCT  idstring  FROM keys_batchno  union SELECT  DISTINCT  idstring  FROM keys_registerno  union SELECT  DISTINCT  idstring  FROM keys_accessNo  union SELECT  DISTINCT  idstring  FROM keys_location  union SELECT  DISTINCT  idstring  FROM keys_refID  union SELECT  DISTINCT  idstring  FROM keys_locationclass  union SELECT  DISTINCT  idstring  FROM keys_parent  union SELECT  DISTINCT  idstring  FROM keys_state  union SELECT  DISTINCT  idstring  FROM keys_parentlocation ) 
+                 * 应该修改为
+                 * select  '', id, 'barcode' from records where id like '__________' and id not in ( SELECT  DISTINCT  idstring  FROM keys_barcode )
+                 * UNION select  '', id, 'batchno' from records where id like '__________' and id not in ( SELECT  DISTINCT  idstring  FROM keys_batchno )
+                 * */
+
+                string strOrderBy = "";
+                if (string.IsNullOrEmpty(searchItem.OrderBy) == false)
+                {
+                    strOrderBy = " ORDER BY " + searchItem.OrderBy + " ";
+
+                    // 2010/5/10
+                    string strTemp = searchItem.OrderBy.ToLower();
+                    if (strTemp.IndexOf("desc") != -1)
+                        resultSet.Asc = -1;
+
+                    // TODO: 多个select union, 总的序可能是乱的
+                }
+
+                // 2009/8/5
+                if (bSearchNull == true)
+                {
+                    string strTop = "";
+                    string strLimit = "";
+
+                    if (searchItem.MaxCount != -1)  //限制的最大数
+                    {
+                        if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                            strTop = " TOP " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else if (this.container.SqlServerType == SqlServerType.SQLite)
+                            strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else if (this.container.SqlServerType == SqlServerType.MySql)
+                            strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else if (this.container.SqlServerType == SqlServerType.Oracle)
+                            strLimit = " WHERE rownum <= " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else
+                            throw new Exception("未知的 SqlServerType");
+                    }
+
+                    // Oracle比较特殊
+                    if (this.container.SqlServerType == SqlServerType.Oracle)
+                    {
+                        if (string.IsNullOrEmpty(strLimit) == false)
+                            strCommand = "SELECT * FROM (" + strCommand + ") "
+        + strOrderBy    // 2012/3/30
+        + strLimit;
+                        else
+                            strCommand = "select * FROM (" + strCommand + ") "
+        + strOrderBy    // 2012/3/30
+        ;
+                    }
+                    else
+                    {
+                        // 将 top 子句插入 select 后面 2015/12/23
+                        if (string.IsNullOrEmpty(strTop) == false)
+                            strCommand = InsertTopPart(strCommand, strTop);
+
+                        if (string.IsNullOrEmpty(strLimit) == false
+        || string.IsNullOrEmpty(strOrderBy) == false)
+                            strCommand = strCommand
+        + strOrderBy
+        + strLimit;
+
+#if NO
+                        // strTop 有内容时这个用法要导致 MS SQL Server 报错
+                        if (string.IsNullOrEmpty(strTop) == false
+                            || string.IsNullOrEmpty(strLimit) == false
+                            || string.IsNullOrEmpty(strOrderBy) == false)
+                            strCommand = "select "
+        + strTop
+        + " * FROM (" + strCommand + ") "
+        + strOrderBy
+        + strLimit;
+#endif
+                    }
+
+
+#if NO
+                    string strTop = "";
+                    string strLimit = "";
+
+                    if (searchItem.MaxCount != -1)  //限制的最大数
+                    {
+                        if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                            strTop = " TOP " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else if (this.container.SqlServerType == SqlServerType.SQLite)
+                            strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else if (this.container.SqlServerType == SqlServerType.MySql)
+                            strLimit = " LIMIT " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else if (this.container.SqlServerType == SqlServerType.Oracle)
+                            strLimit = " WHERE rownum <= " + Convert.ToString(searchItem.MaxCount) + " ";
+                        else
+                            throw new Exception("未知的 SqlServerType");
+                    }
+
+                    string strColumns = " id ";
+                    if (bOutputKeyCount == true)
+                    {
+                        if (bSearchNull == true)
+                            strColumns = " '', count(*) ";  // 2015/8/25
+                        else
+                            strColumns = " keystring='', count(*) ";
+                    }
+                    else if (bOutputKeyID == true)
+                    {
+                        if (bSearchNull == true)
+                        {
+                            // strColumns = " '', id, 'recid' ";  // 2015/8/25 TODO 第三列内容应该根据 tablename 翻译得到
+                            strColumns = " '', id, '"
+                                +(string.IsNullOrEmpty(strFromValue) == false ? strFromValue: "recid")
+                                +"' ";// 2015/8/25 
+                        }
+                        else
+                            strColumns = " keystring=id, id, fromstring='recid' ";   // fromstring='' 2011/7/24
+                    }
+
+                    // Oracle比较特殊
+                    if (this.container.SqlServerType == SqlServerType.Oracle)
+                    {
+                        if (string.IsNullOrEmpty(strLimit) == false)
+                            strCommand = "SELECT * FROM (select "
+    + strColumns // " id "
+    + "from " + this.m_strSqlDbName + "_records where id like '__________' and id not in (" + strCommand + ") "
+    + strOrderBy    // 2012/3/30
+    + ") " + strLimit;
+                        else
+                            strCommand = "select "
++ strColumns // " id "
++ "from " + this.m_strSqlDbName + "_records where id like '__________' and id not in (" + strCommand + ") "
++ strOrderBy    // 2012/3/30
+;
+                    }
+                    else
+                    {
+                        strCommand = "select "
+    + strTop
+    + strColumns // " id "
+    + "from records where id like '__________' and id not in (" + strCommand + ") "
+    + strOrderBy    // 2012/3/30
+    + strLimit;
+                    }
+
+#endif
+                }
+                else
+                {
+                    if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                        strCommand += " " + strOrderBy;
+                    else
+                        bNeedSort = true;
+                    // TODO: 其他数据库类型，是否在一个select * from () 后面加order by(如果只有一个select语句则不要加外壳)，还是在每个具体的select语句里面加order by?
+                }
+
+                if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                    strCommand = "use " + this.m_strSqlDbName + " "
+                    + strCommand;
+                else if (this.container.SqlServerType == SqlServerType.MySql)
+                    strCommand = "use `" + this.m_strSqlDbName + "` ;\n"
+                    + strCommand;
+
+                if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                    strCommand += " use master " + "\n";
+
+                if (aSqlParameter == null)
+                {
+                    strError = "一个参数也没 是不可能的情况";
+                    return -1;
+                }
+
+                nRet = ExecuteQueryFillResultSet(
+            handle,
+            strCommand,
+            aSqlParameter,
+            resultSet,
+            searchItem.MaxCount,
+            GetOutputStyle(strOutputStyle),
+            false,
+            out strError);
+                if (nRet == -1 || nRet == 0)
+                    return nRet;    // ???
+#if NO
+                // ***
+                Connection connection = new Connection(this,
+    this.m_strConnString);
+                connection.TryOpen();
+                try
+                {
+                    DbCommand command = null;
+
+                    if (this.container.SqlServerType == SqlServerType.MsSqlServer)
+                    {
+                        command = new SqlCommand(strCommand,
+                        connection.SqlConnection);
+                    }
+                    else if (this.container.SqlServerType == SqlServerType.SQLite)
+                    {
+                        command = new SQLiteCommand(strCommand,
+                        connection.SQLiteConnection);
+                    }
+                    else if (this.container.SqlServerType == SqlServerType.MySql)
+                    {
+                        command = new MySqlCommand(strCommand,
+                        connection.MySqlConnection);
+                    }
+                    else if (this.container.SqlServerType == SqlServerType.Oracle)
+                    {
+                        command = new OracleCommand(strCommand,
+                             connection.OracleConnection);
+                        ((OracleCommand)command).BindByName = true;
+                    }
+                    else
+                        throw new ArgumentException("未知的 connection.SqlServerType '" + connection.SqlServerType.ToString() + "'");
+
+                    // ****
+                    using (command)
+                    {
+                        command.CommandTimeout = 20 * 60;  // 把检索时间变大
+                        foreach (DbParameter sqlParameter in aSqlParameter)
+                        {
+                            command.Parameters.Add(sqlParameter);
+                        }
+
+                        var reader = command.ExecuteReaderAsync(CommandBehavior.CloseConnection,
+    handle.CancelTokenSource.Token).Result;
+
+                        // 从 DbDataReader 中获取和填入记录到一个结果集对象中
+                        // return:
+                        //      -1  出错
+                        //      0   没有填入任何记录
+                        //      >0  实际填入的记录条数
+                        nRet = FillResultSet(
+                                handle,
+                                reader,
+                                resultSet,
+                                searchItem.MaxCount,
+                                GetOutputStyle(strOutputStyle),
+                                false,
+                                out strError);
+                        if (nRet == -1 || nRet == 0)
+                            return nRet;
+                    } // end of using command
+
+                }
+                catch (SqlException sqlEx)
+                {
+                    strError = GetSqlErrors(sqlEx);
+                    return -1;
+                }
+                catch (Exception ex)
+                {
+                    strError = "SearchByUnion() exception: " + ExceptionUtil.GetDebugText(ex);
+                    return -1;
+                }
+                finally // 连接
+                {
+                    if (connection != null)
+                        connection.Close();
+                }
+
+#endif
             }
             catch (Exception ex)
             {
@@ -5764,7 +6414,6 @@ namespace DigitalPlatform.rms
                 using (SqlCommand command = new SqlCommand(strCommand,
                     connection.SqlConnection))
                 {
-
                     SqlDataReader dr =
                         command.ExecuteReader(CommandBehavior.SingleResult);
                     try
@@ -5842,7 +6491,6 @@ namespace DigitalPlatform.rms
                 using (SQLiteCommand command = new SQLiteCommand(strCommand,
                     connection.SQLiteConnection))
                 {
-
                     try
                     {
                         SQLiteDataReader dr = command.ExecuteReader(CommandBehavior.SingleResult);
@@ -6341,6 +6989,9 @@ namespace DigitalPlatform.rms
                         if (string.IsNullOrEmpty(strXPath) == false
                             || StringUtil.IsInList("withresmetadata", strStyle) == true)
                         {
+                            // 2018/7/16
+                            // TODO: 这里要限制一下记录的尺寸，一面内存被爆掉。另外还需要预先看看 metadata，看看记录是不是 XML 内容，如果不是，就不让用 XPath 取得局部
+
                             // return:
                             //		-1  出错
                             //		-4  记录不存在
@@ -6349,6 +7000,7 @@ namespace DigitalPlatform.rms
                             lRet = this.GetImage(connection,
                                 null,
                                 strRecordID,
+                                "",
                                 false,  // "data",
                                 0,
                                 -1,
@@ -6363,7 +7015,7 @@ namespace DigitalPlatform.rms
 
                             if (baWholeXml == null && string.IsNullOrEmpty(strXPath) == false)
                             {
-                                strError = "您虽然使用了xpath，但未取得数据，可以是由于style风格不正确，当前style的值为 '" + strStyle + "'。";
+                                strError = "您虽然使用了 XPath，但未取得数据，可能是因为 strStyle 风格不正确，当前 strStyle 值为 '" + strStyle + "'。";
                                 return -1;
                             }
 
@@ -6455,6 +7107,7 @@ namespace DigitalPlatform.rms
                                     lRet = this.GetImage(connection,
                                         null,
                                         strObjectFullID,
+                                        "",
                                         false,  // "data",
                                         lStart,
                                         nLength,
@@ -6514,15 +7167,11 @@ namespace DigitalPlatform.rms
                         {
                             if (dom != null)
                             {
-                                string strLocateXPath = "";
-                                string strCreatePath = "";
-                                string strNewRecordTemplate = "";
-                                string strAction = "";
                                 nRet = DatabaseUtil.ParseXPathParameter(strXPath,
-                                    out strLocateXPath,
-                                    out strCreatePath,
-                                    out strNewRecordTemplate,
-                                    out strAction,
+                                    out string strLocateXPath,
+                                    out string strCreatePath,
+                                    out string strNewRecordTemplate,
+                                    out string strAction,
                                     out strError);
                                 if (nRet == -1)
                                     return -1;
@@ -6551,14 +7200,13 @@ namespace DigitalPlatform.rms
                                 }
                                 else
                                 {
-                                    strError = "通过xpath '" + strXPath + "' 找到的节点的类型不支持。";
+                                    strError = "通过 XPath '" + strXPath + "' 找到的节点的类型为 '" + node.NodeType.ToString() + "'，属于不支持的情况";
                                     return -1;
                                 }
 
                                 byte[] baOutputText = DatabaseUtil.StringToByteArray(strOutputText,
                                     baPreamble);
 
-                                long lRealLength;
                                 // return:
                                 //		-1  出错
                                 //		0   成功
@@ -6566,7 +7214,7 @@ namespace DigitalPlatform.rms
                                     nLength,
                                     baOutputText.Length,
                                     nMaxLength,
-                                    out lRealLength,
+                                    out long lRealLength,
                                     out strError);
                                 if (nRet == -1)
                                     return -1;
@@ -6660,6 +7308,7 @@ namespace DigitalPlatform.rms
                         lRet = this.GetImage(connection,
                             null,
                             strRecordID,
+                            "",
                             false,  // "data",
                             lStart,
                             nLength,
@@ -6853,6 +7502,7 @@ namespace DigitalPlatform.rms
             long lRet = this.GetImage(connection,
                 row_info,
                 strID,
+                "",
                 // strFieldName,
                 bTempField,
                 0,
@@ -6873,7 +7523,7 @@ namespace DigitalPlatform.rms
 
         // 按指定范围读资源
         // parameter:
-        //		strID       记录ID
+        //		strRecordID       记录ID
         //		nStart      开始位置
         //		nLength     长度 -1:开始到结束
         //		destBuffer  out参数，返回字节数组
@@ -6885,6 +7535,7 @@ namespace DigitalPlatform.rms
         //		>=0 资源总长度
         public override long GetObject(string strRecordID,
             string strObjectID,
+            string strXPath,
             long lStart,
             int nLength,
             int nMaxLength,
@@ -6914,30 +7565,48 @@ namespace DigitalPlatform.rms
 #endif
                 try  // 记录锁
                 {
-
                     Connection connection = new Connection(this,
                         this.m_strConnString);
                     connection.TryOpen();
                     try // 连接
                     {
                         string strObjectFullID = strRecordID + "_" + strObjectID;
-                        // return:
-                        //		-1  出错
-                        //		-4  记录不存在
-                        //      -100    对象文件不存在
-                        //		>=0 资源总长度
+
+                        if (string.IsNullOrEmpty(strXPath))
+                        {
+                            // return:
+                            //		-1  出错
+                            //		-4  记录不存在
+                            //      -100    对象文件不存在
+                            //		>=0 资源总长度
+                            return this.GetImage(connection,
+                                null,
+                                strObjectFullID,
+                                "",
+                                false,  // "data",
+                                lStart,
+                                nLength,
+                                nMaxLength,
+                                strStyle,
+                                out destBuffer,
+                                out strMetadata,
+                                out outputTimestamp,
+                                out strError);
+                        }
+
                         return this.GetImage(connection,
-                            null,
-                            strObjectFullID,
-                            false,  // "data",
-                            lStart,
-                            nLength,
-                            nMaxLength,
-                            strStyle,
-                            out destBuffer,
-                            out strMetadata,
-                            out outputTimestamp,
-                            out strError);
+        null,
+        strObjectFullID,
+        strXPath,
+        false,  // "data",
+        lStart,
+        nLength,
+        nMaxLength,
+        strStyle,
+        out destBuffer,
+        out strMetadata,
+        out outputTimestamp,
+        out strError);
                     }
                     catch (SqlException sqlEx)
                     {
@@ -7014,11 +7683,314 @@ namespace DigitalPlatform.rms
             return rangeList[0].lLength;
         }
 
+        // 把整个对象文件写入物理文件。为 PDF 创建单页图像文件做准备
+        // parameters:
+        //      bFreely [out] 是否为独立文件。独立文件需要在使用后立即删除
+        int GetObjectFile(Connection connection,
+            string strRecPath,
+            string strDataFieldName,
+            byte[] textPtr,
+            long lTotalLength,
+            out bool bFreely,
+            out string strObjectFileName,
+            out string strError)
+        {
+            strError = "";
+            strObjectFileName = "";
+            bFreely = false;
+
+            try
+            {
+                PageItem item = _pageCache.GetPage(strRecPath, 0, 0, "object_file",
+                    () =>
+                    {
+                        string strTempFileName = this.container.GetTempFileName();
+                        // 先把整个对象文件写入一个对象文件
+                        using (SqlImageStream source = new SqlImageStream(connection,
+                        this.m_strSqlDbName,
+                        strDataFieldName,
+                        textPtr,
+                        lTotalLength))
+                        {
+                            using (FileStream output = File.Create(strTempFileName))
+                            {
+                                source.Seek(0, SeekOrigin.Begin);
+                                StreamUtil.DumpStream(source, output);
+                            }
+                        }
+
+                        return new Tuple<string, int>(strTempFileName, (int)lTotalLength);
+                    },
+                    (filename) =>
+                    {
+                        this._streamCache.FileDelete(filename);
+                    },
+                    this.container.KernelApplication._app_down.Token);
+                strObjectFileName = item.FilePath;
+                Debug.Assert(string.IsNullOrEmpty(strObjectFileName) == false, "");
+                if (item.State == "Freely")
+                    bFreely = true;
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                strError = "GetObjectFile() 出现异常: " + ExceptionUtil.GetDebugText(ex);
+                return -1;
+            }
+        }
+
+        // 将图像文件格式 string 转换为 ImageFormat 对象。jpeg/png 等
+        private static ImageFormat GetImageFormat(string format)
+        {
+            ImageFormat imageFormat = null;
+
+            try
+            {
+                var imageFormatConverter = new ImageFormatConverter();
+                imageFormat = (ImageFormat)imageFormatConverter.ConvertFromString(format);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            return imageFormat;
+        }
+
+        static readonly string DefaultPageFormat = "jpeg"; // 图像文件格式默认 jpeg
+
+        // 从 PDF 文件中按照 strPartCmd 命令要求，解析出单页图片文件
+        // parameters:
+        //      strPartCmd  一般为 "page:1,format:png,dpi:300" 形态
+        //                  如果为 "page:?" 表示只想获取 PDF 文件中的总页数，并不创建单页图像文件
+        // return:
+        //      -1  出错
+        //      0   成功。仅获得 nPageCount
+        //      1   成功。同时获得了单页图像文件
+        int GetPageImage(
+            string strRecPath,
+            string strPdfFileName,
+            string strPartCmd,
+            out int nPageCount,
+            out bool bFreely,
+            out string strPageImageFileName,
+            out string strError)
+        {
+            strError = "";
+            strPageImageFileName = "";
+            nPageCount = 0;
+            bFreely = false;
+
+            // page:1
+            Hashtable parameters = StringUtil.ParseParameters(strPartCmd, ',', ':', "");
+            string strPage = (string)parameters["page"];
+
+            if (strPage == "?")
+            {
+                try
+                {
+                    // 单独一次调用检测 PDF 文件中的页码数
+                    using (GhostscriptRasterizer rasterizer = new GhostscriptRasterizer())
+                    {
+                        rasterizer.Open(strPdfFileName, DatabaseCollection.gvi, false);
+
+                        nPageCount = rasterizer.PageCount;
+
+                        rasterizer.Close();
+                    }
+
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    strError = ExceptionUtil.GetDebugText(ex);
+                    return -1;
+                }
+                finally
+                {
+                    GC.Collect();
+                }
+            }
+
+            if (Int32.TryParse(strPage, out int nPageNo) == false)
+            {
+                strError = "对象局部描述命令 '" + strPartCmd + "' 格式错误: 子参数 page 值 '" + strPage + "' 应为纯数字";
+                return -1;
+            }
+
+            string strDPI = (string)parameters["dpi"];
+            int nDPI = 100;
+            if (string.IsNullOrEmpty(strDPI) == false)
+            {
+                if (Int32.TryParse(strDPI, out nDPI) == false)
+                {
+                    strError = "对象局部描述命令 '" + strPartCmd + "' 格式错误: 子参数 dpi 值 '" + strDPI + "' 应为纯数字";
+                    return -1;
+                }
+            }
+
+            string strFormat = (string)parameters["format"];
+            if (string.IsNullOrEmpty(strFormat))
+                strFormat = DefaultPageFormat;
+            ImageFormat format = GetImageFormat(strFormat);
+            if (format == null)
+            {
+                strError = "对象局部描述命令 '" + strPartCmd + "' 格式错误: 无法识别的图像格式名 '" + strFormat + "'";
+                return -1;
+            }
+
+            try
+            {
+                PageItem item = _pageCache.GetPage(strRecPath, nPageNo, nDPI, strFormat,
+                    () =>
+                    {
+                        int nTotalPage = 0;
+                        string strTempFileName = this.container.GetTempFileName();
+                        using (GhostscriptRasterizer rasterizer = new GhostscriptRasterizer())
+                        {
+                            rasterizer.Open(strPdfFileName, DatabaseCollection.gvi, false);
+
+                            nTotalPage = rasterizer.PageCount;
+                            // 0 表示最后一页
+                            if (nPageNo == 0)
+                                nPageNo = nTotalPage;
+
+                            if (nPageNo > nTotalPage)
+                                throw new Exception("超过页码范围");
+
+                            using (Image img = rasterizer.GetPage(nDPI, nDPI, nPageNo))
+                            {
+                                img.Save(strTempFileName, format);
+                            }
+#if NO
+                }
+                catch (GhostscriptException ex)
+                {
+                    // .Code == -1000
+                    MessageBox.Show(this, ex.Message);
+                }
+#endif
+                            rasterizer.Close();
+                        }
+
+                        GC.Collect();
+                        return new Tuple<string, int>(strTempFileName, nTotalPage);
+                    },
+                    (filename) =>
+                    {
+                        this._streamCache.FileDelete(filename);
+                    },
+                    this.container.KernelApplication._app_down.Token);
+
+                strPageImageFileName = item.FilePath;
+                if (item.State == "Freely")
+                    bFreely = true;
+                nPageCount = item.TotalPage;
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                strError = ExceptionUtil.GetDebugText(ex);
+                return -1;
+            }
+        }
+
+        // 得到一个 pdf 页面图像的指定范围的 byte []
+        // parameters:
+        //      strPartCmd  描述单页部分的命令。形如 "page:1,format:png,dpi:300"
+        //                  如果为 "page:?" 表示只想获取 PDF 文件中的总页数，并不创建单页图像文件
+        //      lTotalLength [in][out] 返回的时候，是页面图像的 bytes
+        int GetPageImagePart(
+            string strRecPath,
+            string strObjectFilename,
+            string strPartCmd,
+            long lStart,
+            int nReadLength,
+            int nMaxLength,
+            ref long lTotalLength,
+            ref byte[] destBuffer,
+            out string strError)
+        {
+            strError = "";
+
+            string strPageImageFileName = "";
+            bool bFreely = false;
+
+            try
+            {
+                // 先读出整个单页的 png 图像文件内容
+                // return:
+                //      -1  出错
+                //      0   成功。仅获得 nPageCount
+                //      1   成功。同时获得了单页图像文件
+                int nRet = GetPageImage(
+                    strRecPath,
+                    strObjectFilename,
+                    strPartCmd,
+                    out int nPageCount,
+                    out bFreely,
+                    out strPageImageFileName,
+                    out strError);
+                if (nRet == -1)
+                    return -1;
+
+                if (nRet == 0)
+                {
+                    destBuffer = new byte[0];
+                    lTotalLength = nPageCount;
+                    return 0;
+                }
+
+                FileInfo fi = new FileInfo(strPageImageFileName);
+                lTotalLength = fi.Length;
+
+                // 得到实际读的长度
+                // return:
+                //		-1  出错
+                //		0   成功
+                nRet = ConvertUtil.GetRealLengthNew(lStart,
+                nReadLength,
+                lTotalLength,
+                nMaxLength,
+                out long lOutputLength,
+                out strError);
+                if (nRet == -1)
+                    return -1;
+
+                Debug.Assert(lOutputLength < Int32.MaxValue && lOutputLength > Int32.MinValue, "");
+
+                if (lTotalLength == 0)  // 总长度为0
+                {
+                    destBuffer = new byte[0];
+                    // goto END1;
+                    return 0;
+                }
+
+                // return:
+                //      1   成功
+                //      -100    文件不存在
+                nRet = ReadObjectFile(strPageImageFileName,
+        lStart,
+        lOutputLength,
+        out destBuffer,
+        out strError);
+                if (nRet < 0)
+                    return nRet;
+                // goto END1;
+                return 0;
+            }
+            finally
+            {
+                if (bFreely && string.IsNullOrEmpty(strPageImageFileName) == false)
+                    this._streamCache.FileDelete(strPageImageFileName);
+            }
+        }
 
         // 按指定范围读资源
         // parameter:
         //      row_info    如果row_info != null，则不理会strID参数了
         //		strID       记录ID。用于在row_info == null的情况下获得行信息
+        //      strPartCmd       要限定读取的 pdf 页命令。空 为不使用读取页功能，读出的为对象的 bytes。如果使用了读取页功能，则函数的语义变为读取指定的页的 png 文件“对象”内的指定范围 bytes
         //      bTempField  是否需要从临时 data 字段中提取数据? (在没有reverse的情况下，临时data字段指 newdata 字段)
         //		nStart      开始位置
         //		nLength     长度 -1:开始到结束
@@ -7034,6 +8006,7 @@ namespace DigitalPlatform.rms
         private long GetImage(Connection connection,
             RecordRowInfo row_info,
             string strID,
+            string strPartCmd,
             // string strImageFieldName,
             bool bTempField,    // 是否需要从临时 data 字段中提取数据?
             long lStart,
@@ -7067,6 +8040,8 @@ namespace DigitalPlatform.rms
                 string strDataFieldName = "data";
 
                 bool bObjectFile = false;
+
+                bool bNeedPage = StringUtil.IsInList("metadata", strStyle) == true && string.IsNullOrEmpty(strPartCmd) == false;
 
                 if (row_info != null)
                 {
@@ -7131,7 +8106,8 @@ namespace DigitalPlatform.rms
                     string strPartComm = "";
 
                     // 1.textPtr
-                    if (StringUtil.IsInList("data", strStyle) == true)
+                    if (StringUtil.IsInList("data", strStyle) == true
+                        || bNeedPage)
                     {
                         if (string.IsNullOrEmpty(strPartComm) == false)
                             strPartComm += ",";
@@ -7205,7 +8181,8 @@ namespace DigitalPlatform.rms
                         // 1.textPtr
                         SqlParameter textPtrParam = null;
                         SqlParameter textPtrParamNew = null;
-                        if (StringUtil.IsInList("data", strStyle) == true)
+                        if (StringUtil.IsInList("data", strStyle) == true
+                            || bNeedPage)
                         {
                             textPtrParam =
                                 command.Parameters.Add("@textPtr",
@@ -7355,7 +8332,8 @@ namespace DigitalPlatform.rms
                                 strDataFieldName = "newdata";
 
                             // 1.textPtr
-                            if (StringUtil.IsInList("data", strStyle) == true)
+                            if (StringUtil.IsInList("data", strStyle) == true
+                                || bNeedPage)
                             {
                                 if (bReverse == false)
                                 {
@@ -7510,8 +8488,71 @@ namespace DigitalPlatform.rms
                 }
 
                 // 需要提取数据时,才会取数据
-                if (StringUtil.IsInList("data", strStyle) == true)
+                if (StringUtil.IsInList("data", strStyle) == true
+                    || bNeedPage)
                 {
+                    // 从对象文件读取指定 pdf 页码内容
+                    if (string.IsNullOrEmpty(strPartCmd) == false && bObjectFile == true)
+                    {
+                        // 得到一个 pdf 页面图像的指定范围的 byte []
+                        nRet = GetPageImagePart(
+                            GetCacheRecPath(strID),
+                            strObjectFilename,
+                            strPartCmd,
+                            lStart,
+                            nReadLength,
+                            nMaxLength,
+                            ref lTotalLength,
+                            ref destBuffer,
+                            out strError);
+                        if (nRet == -1)
+                            return -1;
+                        goto END1;
+                    }
+
+                    if (string.IsNullOrEmpty(strPartCmd) == false && bObjectFile == false)
+                    {
+                        bool bFreely = false;
+                        string strObjectFilePath = "";
+
+                        try
+                        {
+                            nRet = GetObjectFile(connection,
+        this.GetCacheRecPath(strID),    // this.m_strSqlDbName + "/" + strID,
+        strDataFieldName,
+        textPtr,
+        lTotalLength,
+        out bFreely,
+        out strObjectFilePath,
+        out strError);
+                            if (nRet == -1)
+                                return -1;
+
+                            // 得到一个 pdf 页面图像的指定范围的 byte []
+                            nRet = GetPageImagePart(
+                                GetCacheRecPath(strID),
+                                strObjectFilePath,
+                                strPartCmd,
+                                lStart,
+                                nReadLength,
+                                nMaxLength,
+                                ref lTotalLength,
+                                ref destBuffer,
+                                out strError);
+                            if (nRet == -1)
+                                return -1;
+
+                        }
+                        finally
+                        {
+                            // 释放对象文件
+                            if (bFreely && string.IsNullOrEmpty(strObjectFilePath) == false)
+                                _streamCache.FileDelete(strObjectFilePath);
+                        }
+
+                        goto END1;
+                    }
+
                     if (nReadLength == 0)  // 取0长度
                     {
                         destBuffer = new byte[0];
@@ -7519,17 +8560,16 @@ namespace DigitalPlatform.rms
                         goto END1;
                     }
 
-                    long lOutputLength = 0;
                     // 得到实际读的长度
                     // return:
                     //		-1  出错
                     //		0   成功
                     nRet = ConvertUtil.GetRealLengthNew(lStart,
-                        nReadLength,
-                        lTotalLength,
-                        nMaxLength,
-                        out lOutputLength,
-                        out strError);
+                nReadLength,
+                lTotalLength,
+                nMaxLength,
+                out long lOutputLength,
+                out strError);
                     if (nRet == -1)
                         return -1;
 
@@ -7911,9 +8951,31 @@ namespace DigitalPlatform.rms
                     lTotalLength = fi.Length;
                 }
 
+                bool bNeedPage = StringUtil.IsInList("metadata", strStyle) == true && string.IsNullOrEmpty(strPartCmd) == false;
+
                 // 需要提取数据时,才会取数据
-                if (StringUtil.IsInList("data", strStyle) == true)
+                if (StringUtil.IsInList("data", strStyle) == true
+                    || bNeedPage)
                 {
+                    // 从对象文件读取指定 pdf 页码内容
+                    if (string.IsNullOrEmpty(strPartCmd) == false && bObjectFile == true)
+                    {
+                        // 得到一个 pdf 页面图像的指定范围的 byte []
+                        nRet = GetPageImagePart(
+                            GetCacheRecPath(strID),
+                            strObjectFilename,
+                            strPartCmd,
+                            lStart,
+                            nReadLength,
+                            nMaxLength,
+                            ref lTotalLength,
+                            ref destBuffer,
+                            out strError);
+                        if (nRet == -1)
+                            return -1;
+                        goto END1;
+                    }
+
                     if (nReadLength == 0)  // 取0长度
                     {
                         destBuffer = new byte[0];
@@ -7921,7 +8983,6 @@ namespace DigitalPlatform.rms
                         goto END1;
                     }
 
-                    long lOutputLength = 0;
                     // 得到实际读的长度
                     // return:
                     //		-1  出错
@@ -7930,7 +8991,7 @@ namespace DigitalPlatform.rms
                         nReadLength,
                         lTotalLength,
                         nMaxLength,
-                        out lOutputLength,
+                        out long lOutputLength,
                         out strError);
                     if (nRet == -1)
                         return -1;
@@ -8242,9 +9303,30 @@ namespace DigitalPlatform.rms
                     lTotalLength = fi.Length;
                 }
 
+                bool bNeedPage = StringUtil.IsInList("metadata", strStyle) == true && string.IsNullOrEmpty(strPartCmd) == false;
+
                 // 需要提取数据时,才会取数据
-                if (StringUtil.IsInList("data", strStyle) == true)
+                if (StringUtil.IsInList("data", strStyle) == true
+                    || bNeedPage)
                 {
+                    // 从对象文件读取指定 pdf 页码内容
+                    if (string.IsNullOrEmpty(strPartCmd) == false && bObjectFile == true)
+                    {
+                        // 得到一个 pdf 页面图像的指定范围的 byte []
+                        nRet = GetPageImagePart(GetCacheRecPath(strID),
+                            strObjectFilename,
+                            strPartCmd,
+                            lStart,
+                            nReadLength,
+                            nMaxLength,
+                            ref lTotalLength,
+                            ref destBuffer,
+                            out strError);
+                        if (nRet == -1)
+                            return -1;
+                        goto END1;
+                    }
+
                     if (nReadLength == 0)  // 取0长度
                     {
                         destBuffer = new byte[0];
@@ -8252,7 +9334,6 @@ namespace DigitalPlatform.rms
                         goto END1;
                     }
 
-                    long lOutputLength = 0;
                     // 得到实际读的长度
                     // return:
                     //		-1  出错
@@ -8261,7 +9342,7 @@ namespace DigitalPlatform.rms
                         nReadLength,
                         lTotalLength,
                         nMaxLength,
-                        out lOutputLength,
+                        out long lOutputLength,
                         out strError);
                     if (nRet == -1)
                         return -1;
@@ -8573,9 +9654,31 @@ namespace DigitalPlatform.rms
                     lTotalLength = fi.Length;
                 }
 
+                bool bNeedPage = StringUtil.IsInList("metadata", strStyle) == true && string.IsNullOrEmpty(strPartCmd) == false;
+
                 // 需要提取数据时,才会取数据
-                if (StringUtil.IsInList("data", strStyle) == true)
+                if (StringUtil.IsInList("data", strStyle) == true
+                    || bNeedPage)
                 {
+                    // 从对象文件读取指定 pdf 页码内容
+                    if (string.IsNullOrEmpty(strPartCmd) == false && bObjectFile == true)
+                    {
+                        // 得到一个 pdf 页面图像的指定范围的 byte []
+                        nRet = GetPageImagePart(
+                            GetCacheRecPath(strID),
+                            strObjectFilename,
+                            strPartCmd,
+                            lStart,
+                            nReadLength,
+                            nMaxLength,
+                            ref lTotalLength,
+                            ref destBuffer,
+                            out strError);
+                        if (nRet == -1)
+                            return -1;
+                        goto END1;
+                    }
+
                     if (nReadLength == 0)  // 取0长度
                     {
                         destBuffer = new byte[0];
@@ -8583,7 +9686,6 @@ namespace DigitalPlatform.rms
                         goto END1;
                     }
 
-                    long lOutputLength = 0;
                     // 得到实际读的长度
                     // return:
                     //		-1  出错
@@ -8592,7 +9694,7 @@ namespace DigitalPlatform.rms
                         nReadLength,
                         lTotalLength,
                         nMaxLength,
-                        out lOutputLength,
+                        out long lOutputLength,
                         out strError);
                     if (nRet == -1)
                         return -1;
@@ -8658,14 +9760,13 @@ namespace DigitalPlatform.rms
             }
             strError = "未知的 connection 类型 '" + connection.SqlServerType.ToString() + "'";
             return -1;
-        END1:
+            END1:
             int nBufferLength = 0;
             if (destBuffer != null)
                 nBufferLength = destBuffer.Length;
             if (StringUtil.IsInList("incReadCount", strStyle) == true
                 && lStart + nBufferLength >= lTotalLength && lTotalLength != -1)
             {
-                string strResultMetadata = "";
                 // return:
                 //		-1	出错
                 //		0	成功
@@ -8673,7 +9774,7 @@ namespace DigitalPlatform.rms
                     "",
                     -2,
                     "+1",
-                    out strResultMetadata,
+                    out string strResultMetadata,
                     out strError);
                 if (nRet == -1)
                     return -1;
@@ -8691,9 +9792,54 @@ namespace DigitalPlatform.rms
                     strMetadata = "";
             }
 
+            // PDF 单页图像时要修正用于返回的 metadata。mimetype size localpath
+            if (string.IsNullOrEmpty(strPartCmd) == false)
+            {
+                nRet = DatabaseUtil.ChangeMetadata(strMetadata,
+        lTotalLength,
+        GetMime(strPartCmd),
+        null,
+        out string strResult,
+        out strError);
+                if (nRet == -1)
+                    return -1;
+                strMetadata = strResult;
+            }
             return lTotalLength;
         }
 
+        // 从单页图像描述命令中，获得 MIME 信息
+        static string GetMime(string strPartCmd)
+        {
+            Hashtable parameters = StringUtil.ParseParameters(strPartCmd, ',', ':', "");
+            string strFormat = (string)parameters["format"];
+            if (string.IsNullOrEmpty(strFormat))
+                strFormat = DefaultPageFormat;
+            switch (strFormat)
+            {
+                case "jpeg":
+                    return "image/jpeg";
+                case "png":
+                    return "image/png";
+                case "gif":
+                    return "image/gif";
+                case "bmp":
+                    return "image/bmp";
+                case "tif":
+                case "tiff":
+                    return "image/tiff";
+                case "emf":
+                    return "image/x-emf";
+                case "wmf":
+                    return "image/x-wmf";
+                case "exif":
+                    return "image/x-exif";
+                case "icon":
+                    return "image/x-icon";
+            }
+
+            return null;
+        }
 #if NO
         // 按指定范围读资源
         // GetBytes()版本。下载大尺寸对象的时候速度非常慢
@@ -9472,7 +10618,7 @@ namespace DigitalPlatform.rms
             // 是否要直接利用输入的时间戳
             bool bForceTimestamp = StringUtil.IsInList("forcesettimestamp", strStyle);
 
-            #region MS SQL Server
+#region MS SQL Server
             if (connection.SqlServerType == SqlServerType.MsSqlServer)
             {
                 int nParameters = 0;
@@ -9497,7 +10643,7 @@ namespace DigitalPlatform.rms
                         {
                             Debug.Assert(string.IsNullOrEmpty(strCommand) == false, "");
                             command.CommandText = "use " + this.m_strSqlDbName + "\n"
-    + strCommand + "use master\n";
+        + strCommand + "use master\n";
 
                             int nCount = command.ExecuteNonQuery();
                             if (nCount == 0)
@@ -9584,14 +10730,14 @@ namespace DigitalPlatform.rms
                             else
                             {
                                 strCommand +=
-    " INSERT INTO records(id, data, range, metadata, dptimestamp,  filename) "
-    + " VALUES(@id" + i + ", NULL, @range" + i + ", @metadata" + i + ", @dptimestamp" + i + ", @filename" + i + ")"
-    + "\n";
+        " INSERT INTO records(id, data, range, metadata, dptimestamp,  filename) "
+        + " VALUES(@id" + i + ", NULL, @range" + i + ", @metadata" + i + ", @dptimestamp" + i + ", @filename" + i + ")"
+        + "\n";
                             }
 
                             SqlParameter idParam =
-command.Parameters.Add("@id" + i,
-SqlDbType.NVarChar);
+        command.Parameters.Add("@id" + i,
+        SqlDbType.NVarChar);
                             idParam.Value = info.ID;
 
                             if (bObjectFile == false)
@@ -9604,9 +10750,9 @@ SqlDbType.NVarChar);
                             }
 
                             SqlParameter rangeParam =
-    command.Parameters.Add("@range" + i,
-    SqlDbType.NVarChar,
-    4000);
+        command.Parameters.Add("@range" + i,
+        SqlDbType.NVarChar,
+        4000);
                             if (bObjectFile == true)
                                 rangeParam.Value = "#";
                             else
@@ -9748,9 +10894,9 @@ SqlDbType.NVarChar);
                     }
                 } // end of using command
             }
-            #endregion // MS SQL Server
+#endregion // MS SQL Server
 
-            #region SQLite
+#region SQLite
             if (connection.SqlServerType == SqlServerType.SQLite)
             {
                 bool bFastMode = false;
@@ -9823,13 +10969,13 @@ SqlDbType.NVarChar);
                             {
                                 // 创建新行
                                 strCommand +=
-    " INSERT INTO records(id, range, metadata, dptimestamp, filename) "
-    + " VALUES(@id" + i + ", @range" + i + ", @metadata" + i + ", @dptimestamp" + i + ", @filename" + i + ")"
-    + " ; ";
+        " INSERT INTO records(id, range, metadata, dptimestamp, filename) "
+        + " VALUES(@id" + i + ", @range" + i + ", @metadata" + i + ", @dptimestamp" + i + ", @filename" + i + ")"
+        + " ; ";
 
                                 SQLiteParameter idParam =
-command.Parameters.Add("@id" + i,
-DbType.String);
+        command.Parameters.Add("@id" + i,
+        DbType.String);
                                 idParam.Value = info.ID;
 
 
@@ -9931,9 +11077,9 @@ DbType.String);
                     }
                 } // end of using command
             }
-            #endregion // SQLite
+#endregion // SQLite
 
-            #region MySql
+#region MySql
             if (connection.SqlServerType == SqlServerType.MySql)
             {
                 int nParameters = 0;
@@ -10036,14 +11182,14 @@ DbType.String);
                             {
                                 // 创建新行
                                 strCommand +=
-    " INSERT INTO `" + this.m_strSqlDbName + "`.records (id, `range`, metadata, dptimestamp, filename) "
-    + " VALUES (@id" + i + ", @range" + i + ", @metadata" + i + ", @dptimestamp" + i + ", @filename" + i + ")"
-    + " ;\n";
+        " INSERT INTO `" + this.m_strSqlDbName + "`.records (id, `range`, metadata, dptimestamp, filename) "
+        + " VALUES (@id" + i + ", @range" + i + ", @metadata" + i + ", @dptimestamp" + i + ", @filename" + i + ")"
+        + " ;\n";
 
 
                                 MySqlParameter idParam =
-command.Parameters.Add("@id" + i,
-MySqlDbType.String);
+        command.Parameters.Add("@id" + i,
+        MySqlDbType.String);
                                 idParam.Value = info.ID;
 
 
@@ -10121,7 +11267,7 @@ MySqlDbType.String);
                         {
                             Debug.Assert(string.IsNullOrEmpty(strCommand) == false, "");
                             command.CommandText = "use " + this.m_strSqlDbName + " ;\n"
-    + strCommand;
+        + strCommand;
 
                             int nCount = command.ExecuteNonQuery();
                             if (nCount == 0)
@@ -10150,9 +11296,9 @@ MySqlDbType.String);
                     }
                 } // end of using command
             }
-            #endregion // MySql
+#endregion // MySql
 
-            #region Oracle
+#region Oracle
             if (connection.SqlServerType == SqlServerType.Oracle)
             {
                 using (OracleCommand command = new OracleCommand("", connection.OracleConnection))
@@ -10225,13 +11371,13 @@ MySqlDbType.String);
                             {
                                 // 创建新行
                                 strCommand +=
-    " INSERT INTO " + this.m_strSqlDbName + "_records (id, range, metadata, dptimestamp, filename) "
-    + " VALUES(:id" + i + ", :range" + i + ", :metadata" + i + ", :dptimestamp" + i + ", :filename" + i + ")"
-    + " ";
+        " INSERT INTO " + this.m_strSqlDbName + "_records (id, range, metadata, dptimestamp, filename) "
+        + " VALUES(:id" + i + ", :range" + i + ", :metadata" + i + ", :dptimestamp" + i + ", :filename" + i + ")"
+        + " ";
 
                                 OracleParameter idParam =
-command.Parameters.Add(":id" + i,
-OracleDbType.NVarchar2);
+        command.Parameters.Add(":id" + i,
+        OracleDbType.NVarchar2);
                                 idParam.Value = info.ID;
 
 
@@ -10335,7 +11481,7 @@ OracleDbType.NVarchar2);
                     }
                 } // end of using command
             }
-            #endregion // Oracle
+#endregion // Oracle
 
             return 0;
         }
@@ -10368,15 +11514,15 @@ OracleDbType.NVarchar2);
             }
 
             int nRedoCount = 0;
-        REDO:
+            REDO:
             try
             {
                 _streamCache.ClearItems(strFileName);
                 using (FileStream s = File.Open(
-strFileName,
-FileMode.OpenOrCreate,
-FileAccess.Write,
-FileShare.ReadWrite))
+        strFileName,
+        FileMode.OpenOrCreate,
+        FileAccess.Write,
+        FileShare.ReadWrite))
                 {
                     // 第一次写文件,并且文件长度大于对象总长度，则截断文件
                     if (s.Length > baContent.Length)
@@ -10411,10 +11557,10 @@ FileShare.ReadWrite))
 
         // 这一层主要是把较大的数组分片进行调用
         private int GetRowInfos(Connection connection,
-    bool bGetData,
-    List<string> ids,
-    out List<RecordRowInfo> row_infos,
-    out string strError)
+        bool bGetData,
+        List<string> ids,
+        out List<RecordRowInfo> row_infos,
+        out string strError)
         {
             strError = "";
             row_infos = new List<RecordRowInfo>();
@@ -10495,7 +11641,7 @@ FileShare.ReadWrite))
             if (nRet == -1)
                 return -1;
 
-            #region MS SQL Server
+#region MS SQL Server
             if (connection.SqlServerType == SqlServerType.MsSqlServer)
             {
                 // TODO: 可否限定超过一定尺寸的数据库就不要返回? 
@@ -10576,7 +11722,7 @@ FileShare.ReadWrite))
                             {
                                 // 对象文件
                                 if (String.IsNullOrEmpty(row_info.Range) == false
-&& row_info.Range[0] == '#')
+        && row_info.Range[0] == '#')
                                 {
                                     nRet = ReadObjectFileContent(row_info,
             out strError);
@@ -10598,7 +11744,7 @@ FileShare.ReadWrite))
                                     dr.GetBytes(12, 0, row_info.NewData, 0, (int)row_info.newdata_length);
                                 }
                             }
-                        CONTINUE:
+                            CONTINUE:
                             row_infos.Add(row_info);
                         }
                     }
@@ -10610,9 +11756,9 @@ FileShare.ReadWrite))
 
                 return 0;
             }
-            #endregion // MS SQL Server
+#endregion // MS SQL Server
 
-            #region SQLite
+#region SQLite
             else if (connection.SqlServerType == SqlServerType.SQLite)
             {
                 string strCommand = " SELECT "
@@ -10667,7 +11813,7 @@ FileShare.ReadWrite))
                             if (bGetData == true)
                             {
                                 nRet = ReadObjectFileContent(row_info,
-out strError);
+        out strError);
                                 if (nRet == -1)
                                     return -1;  // TODO: 是否尽量多读入数据，最后统一警告或者报错?
                             }
@@ -10683,9 +11829,9 @@ out strError);
 
                 return 0;
             }
-            #endregion // SQLite
+#endregion // SQLite
 
-            #region MySql
+#region MySql
             else if (connection.SqlServerType == SqlServerType.MySql)
             {
                 // 注： MySql 这里和 SQLite 基本一样
@@ -10741,7 +11887,7 @@ out strError);
                             if (bGetData == true)
                             {
                                 nRet = ReadObjectFileContent(row_info,
-    out strError);
+        out strError);
                                 if (nRet == -1)
                                     return -1;  // TODO: 是否尽量多读入数据，最后统一警告或者报错?
                             }
@@ -10756,9 +11902,9 @@ out strError);
 
                 return 0;
             }
-            #endregion // MySql
+#endregion // MySql
 
-            #region Oracle
+#region Oracle
             else if (connection.SqlServerType == SqlServerType.Oracle)
             {
                 string strCommand = " SELECT "
@@ -10813,7 +11959,7 @@ out strError);
                             if (bGetData == true)
                             {
                                 nRet = ReadObjectFileContent(row_info,
-    out strError);
+        out strError);
                                 if (nRet == -1)
                                     return -1;  // TODO: 是否尽量多读入数据，最后统一警告或者报错?
                             }
@@ -10830,7 +11976,7 @@ out strError);
 
                 return 0;
             }
-            #endregion // Oracle
+#endregion // Oracle
 
             return 0;
         }
@@ -10850,10 +11996,10 @@ out strError);
                     row_info.Data = null;
                     // 一次性读入全部文件内容，可以不涉及到 Cache 使用
                     using (FileStream s = File.Open(
-    strObjectFilename,
-    FileMode.Open,
-    FileAccess.Read,
-    FileShare.ReadWrite))
+        strObjectFilename,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite))
                     {
                         if (s.Length > 1024 * 1024)
                         {
@@ -10929,12 +12075,12 @@ out strError);
             try
             {
                 Connection connection = GetConnection(
-    this.m_strLongConnString,   // this.m_strConnString,
-    this.container.SqlServerType == SqlServerType.SQLite && bFastMode == true ? ConnectionStyle.Global : ConnectionStyle.None);
+        this.m_strLongConnString,   // this.m_strConnString,
+        this.container.SqlServerType == SqlServerType.SQLite && bFastMode == true ? ConnectionStyle.Global : ConnectionStyle.None);
                 connection.TryOpen();
                 try
                 {
-                    #region MS SQL Server
+#region MS SQL Server
                     if (this.container.SqlServerType == SqlServerType.MsSqlServer)
                     {
                         Stopwatch watch = new Stopwatch();
@@ -10945,7 +12091,7 @@ out strError);
                             bulkCopy.DestinationTableName = this.m_strSqlDbName + ".." + table.TableName;
                             bulkCopy.BulkCopyTimeout = m_nLongTimeout;  // 缺省为 30 (秒)
                             bulkCopy.BatchSize = 10000;  // 缺省为 0 ，表示全部在一批
-                            // 42 万条书目记录，如果作为一批，需要 4 分钟；如果每 5000 条一批，需要 8 分钟
+                                                         // 42 万条书目记录，如果作为一批，需要 4 分钟；如果每 5000 条一批，需要 8 分钟
                             int nRet = table.OpenForRead(table.FileName, out strError);
                             if (nRet == -1)
                                 return -1;
@@ -10964,9 +12110,9 @@ out strError);
                         watch.Stop();
                         this.container.KernelApplication.WriteErrorLog("MS SQL Server BulkCopy 耗时 " + watch.Elapsed.ToString());
                     }
-                    #endregion // MS SQL Server
+#endregion // MS SQL Server
 
-                    #region Oracle
+#region Oracle
                     //strError = "暂不支持";
                     //return -1;
                     if (this.container.SqlServerType == SqlServerType.Oracle)
@@ -10999,9 +12145,9 @@ out strError);
                         watch.Stop();
                         this.container.KernelApplication.WriteErrorLog("Oracle BulkCopy 耗时 " + watch.Elapsed.ToString());
                     }
-                    #endregion // Oracle
+#endregion // Oracle
 
-                    #region MySql
+#region MySql
                     if (this.container.SqlServerType == SqlServerType.MySql)
                     {
                         Stopwatch watch = new Stopwatch();
@@ -11030,10 +12176,10 @@ out strError);
                         watch.Stop();
                         this.container.KernelApplication.WriteErrorLog("MySql BulkCopy 耗时 " + watch.Elapsed.ToString());
                     }
-                    #endregion // MySql
+#endregion // MySql
 
 
-                    #region SQLite
+#region SQLite
                     if (this.container.SqlServerType == SqlServerType.SQLite)
                     {
                         Stopwatch watch = new Stopwatch();
@@ -11064,7 +12210,7 @@ out strError);
                         watch.Stop();
                         this.container.KernelApplication.WriteErrorLog("SQLite BulkCopy 耗时 " + watch.Elapsed.ToString());
                     }
-                    #endregion // SQLite
+#endregion // SQLite
 
                 }
                 catch (SqlException sqlEx)
@@ -11500,7 +12646,7 @@ out strError);
                 // 到此为止，strPath不含object或xpath层 strFirstPart可能是object 或 xpath
 
                 if (strFirstPart != "object"
-    && strFirstPart != "xpath")
+        && strFirstPart != "xpath")
                 {
                     //record.Result.SetValue("资源路径 '" + record.Path + "' 不合法, 第3级必须是 'object' 或 'xpath' ",
                     //    ErrorCodeValue.PathError); // -7;
@@ -11595,7 +12741,7 @@ out strError);
             string strCurrentRange = row_info.Range;
 
             if (String.IsNullOrEmpty(strCurrentRange) == false
-    && strCurrentRange[0] == '!')
+        && strCurrentRange[0] == '!')
             {
                 return row_info.NewTimestampString; // 本次的时间戳
             }
@@ -11611,7 +12757,7 @@ out strError);
             string strCurrentRange = row_info.Range;
 
             if (String.IsNullOrEmpty(strCurrentRange) == false
-    && strCurrentRange[0] == '!')
+        && strCurrentRange[0] == '!')
                 return row_info.NewData;
             else
                 return row_info.Data;
@@ -11701,9 +12847,9 @@ out strError);
                 }
 
                 WriteTimeUsed(
-    time_lines,
-    start_time_1,
-    "处理账户 耗时 ");
+        time_lines,
+        start_time_1,
+        "处理账户 耗时 ");
             }
 
             strOutputID = DbPath.GetCompressedID(strID);
@@ -11754,9 +12900,9 @@ out strError);
                     {
 
                         WriteTimeUsed(
-time_lines,
-start_time_open,
-"Open Connection 耗时 ");
+        time_lines,
+        start_time_open,
+        "Open Connection 耗时 ");
 
 #if NO
                             // 1.如果记录不存在,插入一条字节的记录,以确保得到textPtr
@@ -11867,9 +13013,9 @@ start_time_open,
                                 }
 
                                 WriteTimeUsed(
-time_lines,
-start_time_getxmldata,
-"GetXmlData 耗时 ");
+        time_lines,
+        start_time_getxmldata,
+        "GetXmlData 耗时 ");
                             }
                         }
 
@@ -11913,9 +13059,9 @@ start_time_getxmldata,
                             nWriteCount++;
 
                             WriteTimeUsed(
-time_lines,
-start_time_writesqlrecord,
-"WriteSqlRecord 耗时 ");
+        time_lines,
+        start_time_writesqlrecord,
+        "WriteSqlRecord 耗时 ");
                         }
 
                         // 检查范围
@@ -11932,7 +13078,7 @@ start_time_writesqlrecord,
                                 // 优化。不必从数据库中读取了
                                 byte[] baPreamble = null;
                                 strNewXml = DatabaseUtil.ByteArrayToString(baSource,
-out baPreamble);
+        out baPreamble);
                             }
                             else
                             {
@@ -11955,9 +13101,9 @@ out baPreamble);
                                     return -1;
 
                                 WriteTimeUsed(
-time_lines,
-start_time_getxmldata,
-"GetXmlData 2 耗时 ");
+        time_lines,
+        start_time_getxmldata,
+        "GetXmlData 2 耗时 ");
                             }
 
                             ////
@@ -12010,9 +13156,9 @@ start_time_getxmldata,
                                 // 不过，后面的模块应该能够自动适应
 
                                 WriteTimeUsed(
-time_lines,
-start_time_writesqlrecord,
-"WriteSqlRecord 2 耗时 ");
+        time_lines,
+        start_time_writesqlrecord,
+        "WriteSqlRecord 2 耗时 ");
                             }
 
                             KeyCollection newKeys = null;
@@ -12038,9 +13184,9 @@ start_time_writesqlrecord,
                                 return -1;
 
                             WriteTimeUsed(
-time_lines,
-start_time_mergekeys,
-"MergeKeys 耗时 ");
+        time_lines,
+        start_time_mergekeys,
+        "MergeKeys 耗时 ");
 
                             if (bForceDeleteKeys == true)
                             {
@@ -12079,9 +13225,9 @@ start_time_mergekeys,
                             }
 
                             WriteTimeUsed(
-time_lines,
-start_time_modifykeys,
-"ModifyKeys 耗时 ");
+        time_lines,
+        start_time_modifykeys,
+        "ModifyKeys 耗时 ");
 
                             // 注：如果因为旧的XML对象文件丢失，造成ModifyFiles()去创建已经存在的对象records行，那么创建自然会被忽视，没有什么副作用
 
@@ -12100,9 +13246,9 @@ start_time_modifykeys,
                                 return -1;
 
                             WriteTimeUsed(
-time_lines,
-start_time_modifyfile,
-"ModifyFiles 耗时 ");
+        time_lines,
+        start_time_modifyfile,
+        "ModifyFiles 耗时 ");
                         }
 
                         bDelete = false;    // 此后走到 ERROR2 不会删除新创建的记录
@@ -12145,9 +13291,9 @@ start_time_modifyfile,
             }
 
             WriteTimeUsed(
-time_lines,
-start_time_out,
-"Close Connection 等的耗时 ");
+        time_lines,
+        start_time_out,
+        "Close Connection 等的耗时 ");
 
             // 当本函数被明知为账户库的写操作调用时, 一定要用bCheckAccount==false
             // 来调用，否则容易引起不必要的递归
@@ -12170,18 +13316,18 @@ start_time_out,
                     this.Commit();
 
                     WriteTimeUsed(
-time_lines,
-start_time_1,
-"FastMode Commit 耗时 ");
+        time_lines,
+        start_time_1,
+        "FastMode Commit 耗时 ");
                 }
             }
 
             if (DateTime.Now - start_time > new TimeSpan(0, 0, 1))
             {
                 WriteTimeUsed(
-time_lines,
-start_time,
-"WriteXml 总耗时 ");
+        time_lines,
+        start_time,
+        "WriteXml 总耗时 ");
                 this.container.KernelApplication.WriteErrorLog(
                     "--- 写入 XML 记录的时间超过 1 秒。详情: \r\n"
                     + "记录路径: " + this.GetCaption("zh-CN") + "/" + strID + "\r\n"
@@ -12189,7 +13335,7 @@ start_time,
                     + "\r\n");
             }
             return 0;
-        ERROR2:
+            ERROR2:
             if (bDelete == true)
             {
                 string strError1 = "";
@@ -12221,9 +13367,9 @@ start_time,
         }
 
         static void WriteTimeUsed(
-    List<string> lines,
-    DateTime start_time,
-    string strPrefix)
+        List<string> lines,
+        DateTime start_time,
+        string strPrefix)
         {
             TimeSpan delta = DateTime.Now - start_time;
             lines.Add(strPrefix + " " + delta.TotalSeconds.ToString("F3"));
@@ -12245,7 +13391,6 @@ start_time,
             string strRanges,
             long lTotalLength,
             byte[] baSource,
-            // Stream streamSource,
             string strMetadata,
             string strStyle,
             byte[] inputTimestamp,
@@ -12382,9 +13527,9 @@ start_time,
                         //      0   记录不存在
                         //      1   成功
                         nRet = GetRowInfo(connection,
-    strObjectID,
-    out row_info,
-    out strError);
+        strObjectID,
+        out row_info,
+        out strError);
                         if (nRet == -1)
                             return -1;
                         if (nRet == 0)  // 2013/11/21
@@ -12418,6 +13563,17 @@ start_time,
                         //string strCurrentRange = this.GetRange(connection,strObjectID);
                         if (bFull == true)  //覆盖完了
                         {
+                            // TODO: 可否异步滞后执行?
+                            if (strObjectID.Length > 10)
+                            {
+                                // strID 为 10 字符，或者 0000000000_0000 形态
+                                string record_path = this.GetCacheRecPath(strObjectID);
+                                _pageCache.ClearByRecPath(record_path,
+                                    (filename) =>
+                                    {
+                                        this._streamCache.FileDelete(filename);
+                                    });
+                            }
 #if NO111
                             // 1. 用newdata替换data字段
                             // return:
@@ -12534,7 +13690,7 @@ start_time,
             }
 
             if (StringUtil.IsInList("fastmode", strStyle) == false
-&& this.FastMode == true)
+        && this.FastMode == true)
             {
                 this.Commit();
             }
@@ -12608,11 +13764,11 @@ start_time,
                 RangeItem item = (RangeItem)rangeList[0];
 
                 if (item.lLength > lTotalLength)
-                    return false;	// 唯一一个事项的长度居然超过检测的长度，通常表明有输入参数错误
+                    return false;   // 唯一一个事项的长度居然超过检测的长度，通常表明有输入参数错误
 
                 if (item.lStart == 0
                     && item.lLength == lTotalLength)
-                    return true;	// 表示完全覆盖
+                    return true;    // 表示完全覆盖
             }
 
             return false;
@@ -12848,7 +14004,7 @@ start_time,
 
             bool bFirst = false;    // 是否为第一次写入
             if (rangeList.Count >= 1
-    && rangeList[0].lStart == 0)
+        && rangeList[0].lStart == 0)
             {
                 bFirst = true;
             }
@@ -12974,7 +14130,7 @@ start_time,
 
             // 已有数据的时间戳
             if (String.IsNullOrEmpty(strCurrentRange) == false
-    && strCurrentRange[0] == '!')
+        && strCurrentRange[0] == '!')
             {
                 strCompleteTimestamp = row_info.NewTimestampString;
                 strCurrentTimestamp = row_info.TimestampString;
@@ -13023,7 +14179,7 @@ start_time,
                 }
 
                 if (String.IsNullOrEmpty(strCurrentRange) == false
-    && strCurrentRange[0] == '#')
+        && strCurrentRange[0] == '#')
                 {
                     strCurrentRange = strCurrentRange.Substring(1);
                     if (string.IsNullOrEmpty(strCurrentRange) == false)
@@ -13149,7 +14305,7 @@ start_time,
                     }
 
                     int nRedoCount = 0;
-                REDO:
+                    REDO:
                     try
                     {
 #if NO
@@ -13873,10 +15029,10 @@ start_time,
             try
             {
                 StreamItem s = this._streamCache.GetStream(
-strObjectFilename,
-FileMode.Open,
-FileAccess.Read,
-lStart > CACHE_SIZE);
+        strObjectFilename,
+        FileMode.Open,
+        FileAccess.Read,
+        lStart > CACHE_SIZE);
                 try
                 {
                     s.FileStream.FastSeek(lStart);
@@ -13906,15 +15062,15 @@ lStart > CACHE_SIZE);
             strError = "";
 
             int nRedoCount = 0;
-        REDO:
+            REDO:
             try
             {
                 _streamCache.ClearItems(strFileName);
                 using (FileStream s = File.Open(
-strFileName,
-FileMode.OpenOrCreate,
-FileAccess.Write,
-FileShare.ReadWrite))
+        strFileName,
+        FileMode.OpenOrCreate,
+        FileAccess.Write,
+        FileShare.ReadWrite))
                 {
                     s.SetLength(0);
                     return 0;
@@ -14525,7 +15681,7 @@ FileShare.ReadWrite))
         static int GetReverse(string strCurrentRange)
         {
             if (String.IsNullOrEmpty(strCurrentRange) == false
-    && strCurrentRange[0] == '#')
+        && strCurrentRange[0] == '#')
                 return -1;
             if (String.IsNullOrEmpty(strCurrentRange) == false
                 && strCurrentRange[0] == '!')
@@ -14625,11 +15781,11 @@ FileShare.ReadWrite))
                 || lStartOfTarget == 0 && lCurrentLength > lTotalLength)
             {
                 string strCommand = "use " + this.m_strSqlDbName + " "
-    + " UPDATE records "
-    + " set " + strImageFieldName + "=0x0 "
-    + " where id='" + strID + "'\n"
-    + " SELECT TEXTPTR(" + strImageFieldName + ") from records"
-    + " where id='" + strID + "'\n";
+        + " UPDATE records "
+        + " set " + strImageFieldName + "=0x0 "
+        + " where id='" + strID + "'\n"
+        + " SELECT TEXTPTR(" + strImageFieldName + ") from records"
+        + " where id='" + strID + "'\n";
 
                 strCommand += " use master " + "\n";
 
@@ -14871,7 +16027,7 @@ FileShare.ReadWrite))
             else if (keysDelete != null && keysDelete.Count > 0)
                 strRecordID = ((KeyItem)keysDelete[0]).RecordID;
 
-            #region MS SQL Server
+#region MS SQL Server
             if (connection.SqlServerType == SqlServerType.MsSqlServer)
             {
                 using (SqlCommand command = new SqlCommand("",
@@ -15073,9 +16229,9 @@ FileShare.ReadWrite))
 
                 return 0;
             }
-            #endregion // MS SQL Server
+#endregion // MS SQL Server
 
-            #region SQLite
+#region SQLite
             else if (connection.SqlServerType == SqlServerType.SQLite)
             {
                 using (SQLiteCommand command = new SQLiteCommand("",
@@ -15232,9 +16388,9 @@ FileShare.ReadWrite))
                     }
                 } // end of using command
             }
-            #endregion // SQLite
+#endregion // SQLite
 
-            #region MySql
+#region MySql
             else if (connection.SqlServerType == SqlServerType.MySql)
             {
                 List<string> lines = new List<string>();
@@ -15248,10 +16404,10 @@ FileShare.ReadWrite))
                         string strKeysTableName = oneKey.SqlTableName;
 
                         lines.Add(" DELETE FROM " + strKeysTableName
-+ " WHERE keystring = N'" + MySqlHelper.EscapeString(oneKey.Key)
-+ "' AND fromstring = N'" + MySqlHelper.EscapeString(oneKey.FromValue)
-+ "' AND idstring = N'" + MySqlHelper.EscapeString(oneKey.RecordID)
-+ "' AND keystringnum = N'" + MySqlHelper.EscapeString(oneKey.Num) + "' ;");
+        + " WHERE keystring = N'" + MySqlHelper.EscapeString(oneKey.Key)
+        + "' AND fromstring = N'" + MySqlHelper.EscapeString(oneKey.FromValue)
+        + "' AND idstring = N'" + MySqlHelper.EscapeString(oneKey.RecordID)
+        + "' AND keystringnum = N'" + MySqlHelper.EscapeString(oneKey.Num) + "' ;");
                     }
                 }
 
@@ -15265,11 +16421,11 @@ FileShare.ReadWrite))
                         string strKeysTableName = oneKey.SqlTableName;
 
                         lines.Add(" INSERT INTO " + strKeysTableName
-+ " (keystring,fromstring,idstring,keystringnum) "
-+ " VALUES " + new string((char)1, 1) + "(N'" + MySqlHelper.EscapeString(oneKey.Key) + "',N'"
-+ MySqlHelper.EscapeString(oneKey.FromValue) + "',N'"
-+ MySqlHelper.EscapeString(oneKey.RecordID) + "',N'"
-+ MySqlHelper.EscapeString(oneKey.Num) + "') ");
+        + " (keystring,fromstring,idstring,keystringnum) "
+        + " VALUES " + new string((char)1, 1) + "(N'" + MySqlHelper.EscapeString(oneKey.Key) + "',N'"
+        + MySqlHelper.EscapeString(oneKey.FromValue) + "',N'"
+        + MySqlHelper.EscapeString(oneKey.RecordID) + "',N'"
+        + MySqlHelper.EscapeString(oneKey.Num) + "') ");
                     }
                 }
 
@@ -15355,9 +16511,9 @@ FileShare.ReadWrite))
 
                 return 0;
             }
-            #endregion // MySql
+#endregion // MySql
 
-            #region Oracle
+#region Oracle
             else if (connection.SqlServerType == SqlServerType.Oracle)
             {
                 using (OracleCommand command = new OracleCommand("", connection.OracleConnection))
@@ -15514,7 +16670,7 @@ FileShare.ReadWrite))
                     }
                 } // end of using command
             }
-            #endregion // Oracle
+#endregion // Oracle
 
             return 0;
         }
@@ -15588,8 +16744,9 @@ FileShare.ReadWrite))
                 return 0;
 
             List<string> filenames = new List<string>();    // 对象文件名数组 (短文件名)
+            List<string> ids = new List<string>();  // 对象 ID 数组 (Length >= 10)
 
-            #region MS SQL Server
+#region MS SQL Server
             if (connection.SqlServerType == SqlServerType.MsSqlServer)
             {
                 string strCommand = "";
@@ -15626,7 +16783,7 @@ FileShare.ReadWrite))
 
                             if (string.IsNullOrEmpty(strWhere) == false)
                             {
-                                strCommand = " SELECT filename, newfilename FROM records WHERE " + strWhere + " \n";
+                                strCommand = " SELECT filename, newfilename, id FROM records WHERE " + strWhere + " \n";
                                 strCommand = "use " + this.m_strSqlDbName + " \n"
         + strCommand
         + " use master " + "\n";
@@ -15642,6 +16799,8 @@ FileShare.ReadWrite))
                                                 filenames.Add(dr.GetString(0));
                                             if (dr.IsDBNull(1) == false)
                                                 filenames.Add(dr.GetString(1));
+                                            if (dr.IsDBNull(2) == false)
+                                                ids.Add(dr.GetString(2));
                                         }
                                     }
                                 }
@@ -15715,9 +16874,9 @@ FileShare.ReadWrite))
                     }
                 } // enf of using command
             }
-            #endregion // MS SQL Server
+#endregion // MS SQL Server
 
-            #region SQLite
+#region SQLite
             else if (connection.SqlServerType == SqlServerType.SQLite)
             {
                 string strCommand = "";
@@ -15750,7 +16909,7 @@ FileShare.ReadWrite))
 
                         if (string.IsNullOrEmpty(strWhere) == false)
                         {
-                            strCommand = " SELECT filename, newfilename FROM records WHERE " + strWhere + " \n";
+                            strCommand = " SELECT filename, newfilename, id FROM records WHERE " + strWhere + " \n";
                             command.CommandText = strCommand;
 
                             using (SQLiteDataReader dr = command.ExecuteReader())
@@ -15763,6 +16922,8 @@ FileShare.ReadWrite))
                                             filenames.Add(dr.GetString(0));
                                         if (dr.IsDBNull(1) == false)
                                             filenames.Add(dr.GetString(1));
+                                        if (dr.IsDBNull(2) == false)
+                                            ids.Add(dr.GetString(2));
                                     }
                                 }
                             }
@@ -15843,9 +17004,9 @@ FileShare.ReadWrite))
                     }
                 } // end of using command
             }
-            #endregion // SQLite
+#endregion // SQLite
 
-            #region MySql
+#region MySql
             else if (connection.SqlServerType == SqlServerType.MySql)
             {
                 string strCommand = "";
@@ -15877,7 +17038,7 @@ FileShare.ReadWrite))
 
                         if (string.IsNullOrEmpty(strWhere) == false)
                         {
-                            strCommand = " SELECT filename, newfilename FROM records WHERE " + strWhere + " \n";
+                            strCommand = " SELECT filename, newfilename, id FROM records WHERE " + strWhere + " \n";
                             strCommand = "use `" + this.m_strSqlDbName + "` ;\n"
                                 + strCommand;
                             command.CommandText = strCommand;
@@ -15892,6 +17053,8 @@ FileShare.ReadWrite))
                                             filenames.Add(dr.GetString(0));
                                         if (dr.IsDBNull(1) == false)
                                             filenames.Add(dr.GetString(1));
+                                        if (dr.IsDBNull(2) == false)
+                                            ids.Add(dr.GetString(2));
                                     }
                                 }
                             }
@@ -15975,9 +17138,9 @@ FileShare.ReadWrite))
                     }
                 } // end of using command
             }
-            #endregion // MySql
+#endregion // MySql
 
-            #region Oracle
+#region Oracle
             else if (connection.SqlServerType == SqlServerType.Oracle)
             {
                 string strCommand = "";
@@ -16040,7 +17203,7 @@ FileShare.ReadWrite))
                                 strError = "处理记录路径为 '" + this.GetCaption("zh") + "/" + strID + "' 的子文件发生错误:" + ex.Message + ",sql命令:\r\n" + strCommand;
                                 return -1;
                             }
-                        CONTINUE_1:
+                            CONTINUE_1:
                             command.Parameters.Clear();
                         }
                     }
@@ -16092,9 +17255,9 @@ FileShare.ReadWrite))
                     }
                 } // end of using command
             }
-            #endregion // Oracle
+#endregion // Oracle
 
-        DELETE_OBJECTFILE:
+            DELETE_OBJECTFILE:
             // 删除对象文件
             foreach (string strShortFilename in filenames)
             {
@@ -16117,6 +17280,21 @@ FileShare.ReadWrite))
                 }
             }
 
+            // 清除 PDF 单页 cache
+            foreach (string strObjectID in ids)
+            {
+                if (strObjectID.Length > 10)
+                {
+                    // strID 为 10 字符，或者 0000000000_0000 形态
+                    string record_path = this.GetCacheRecPath(strObjectID);
+                    _pageCache.ClearByRecPath(record_path,
+                        (filename) =>
+                        {
+                            this._streamCache.FileDelete(filename);
+                        });
+                }
+            }
+
             return 0;
         }
 
@@ -16134,7 +17312,7 @@ FileShare.ReadWrite))
                 strError = "connection为null";
                 return -1;
             }
-            #region MS SQL Server
+#region MS SQL Server
             if (connection.SqlServerType == SqlServerType.MsSqlServer)
             {
                 if (connection.SqlConnection == null)
@@ -16149,9 +17327,9 @@ FileShare.ReadWrite))
                 }
                 return 0;
             }
-            #endregion // MS SQL Server
+#endregion // MS SQL Server
 
-            #region SQLite
+#region SQLite
             if (connection.SqlServerType == SqlServerType.SQLite)
             {
                 if (connection.SQLiteConnection == null)
@@ -16166,9 +17344,9 @@ FileShare.ReadWrite))
                 }
                 return 0;
             }
-            #endregion // SQLite
+#endregion // SQLite
 
-            #region MySql
+#region MySql
             if (connection.SqlServerType == SqlServerType.MySql)
             {
                 if (connection.MySqlConnection == null)
@@ -16183,9 +17361,9 @@ FileShare.ReadWrite))
                 }
                 return 0;
             }
-            #endregion // MySql
+#endregion // MySql
 
-            #region Oracle
+#region Oracle
             if (connection.SqlServerType == SqlServerType.Oracle)
             {
                 if (connection.OracleConnection == null)
@@ -16201,7 +17379,7 @@ FileShare.ReadWrite))
                 }
                 return 0;
             }
-            #endregion // Oracle
+#endregion // Oracle
 
             return 0;
         }
@@ -16522,7 +17700,7 @@ FileShare.ReadWrite))
 
         // 获得初次创建的对象文件名
         string BuildObjectFileName(string strID,
-bool bTempObject)
+        bool bTempObject)
         {
             if (string.IsNullOrEmpty(this.m_strObjectDir) == true)
                 return null;
@@ -16569,7 +17747,7 @@ bool bTempObject)
             bool bTempObject)
         {
             string strFileName = "";
-            
+
             if (bTempObject == true)
                 strFileName = PathUtil.MergePath(this.m_strObjectDir, strID + ".temp");
             else
@@ -17396,9 +18574,9 @@ bool bTempObject)
         //      0   记录不存在
         //      1   成功
         private int GetRowInfo(Connection connection,
-    string strID,
-    out RecordRowInfo row_info,
-    out string strError)
+        string strID,
+        out RecordRowInfo row_info,
+        out string strError)
         {
             strError = "";
             row_info = null;
@@ -17972,7 +19150,7 @@ bool bTempObject)
 
             //********对数据库加读锁*********************
             m_db_lock.AcquireReaderLock(m_nTimeOut);
-#if DEBUG_LOCK_SQLDATABASE		
+#if DEBUG_LOCK_SQLDATABASE
 			this.container.WriteDebugInfo("DeleteRecord()，对'" + this.GetCaption("zh-CN") + "'数据库加读锁。");
 #endif
 
@@ -18000,9 +19178,9 @@ bool bTempObject)
                         //      0   记录不存在
                         //      1   成功
                         nRet = GetRowInfo(connection,
-    strRecordID,
-    out row_info,
-    out strError);
+        strRecordID,
+        out row_info,
+        out strError);
                         if (nRet == -1)
                             return -1;
                         if (nRet == 0)  // 2013/11/21
@@ -18020,7 +19198,7 @@ bool bTempObject)
 
                         if (bIgnoreCheckTimestamp == false
                             && ByteArray.Compare(baInputTimestamp,
-    baOutputTimestamp) != 0)
+        baOutputTimestamp) != 0)
                         {
                             strError = "时间戳不匹配";
                             return -2;
@@ -18186,7 +19364,7 @@ bool bTempObject)
                 {
                     //**************对记录解写锁**********
                     m_recordLockColl.UnlockForWrite(strRecordID);
-#if DEBUG_LOCK_SQLDATABASE			
+#if DEBUG_LOCK_SQLDATABASE
 					this.container.WriteDebugInfo("DeleteRecord()，对'" + this.GetCaption("zh-CN") + "/" + strID + "'记录解写锁。");
 #endif
 
@@ -18196,13 +19374,13 @@ bool bTempObject)
             {
                 //***************对数据库解读锁*****************
                 m_db_lock.ReleaseReaderLock();
-#if DEBUG_LOCK_SQLDATABASE		
+#if DEBUG_LOCK_SQLDATABASE
 				this.container.WriteDebugInfo("DeleteRecordForce()，对'" + this.GetCaption("zh-CN") + "'数据库解读锁。");
 #endif
             }
 
             if (StringUtil.IsInList("fastmode", strStyle) == false
-    && this.FastMode == true)
+        && this.FastMode == true)
             {
                 // this.FastMode = false;
                 this.Commit();
@@ -18241,7 +19419,7 @@ bool bTempObject)
 
             //********对数据库加读锁*********************
             m_db_lock.AcquireReaderLock(m_nTimeOut);
-#if DEBUG_LOCK_SQLDATABASE		
+#if DEBUG_LOCK_SQLDATABASE
 			this.container.WriteDebugInfo("RebuildRecordKeys()，对'" + this.GetCaption("zh-CN") + "'数据库加读锁。");
 #endif
             ////
@@ -18379,11 +19557,11 @@ bool bTempObject)
 
 
                     } // end of lock record
-                finally // 记录锁
+                    finally // 记录锁
                     {
                         //**************对记录解写锁**********
                         m_recordLockColl.UnlockForWrite(strRecordID);
-#if DEBUG_LOCK_SQLDATABASE			
+#if DEBUG_LOCK_SQLDATABASE
 					this.container.WriteDebugInfo("RebuildRecordKeys()，对'" + this.GetCaption("zh-CN") + "/" + strID + "'记录解写锁。");
 #endif
                     }
@@ -18410,13 +19588,13 @@ bool bTempObject)
             {
                 //***************对数据库解读锁*****************
                 m_db_lock.ReleaseReaderLock();
-#if DEBUG_LOCK_SQLDATABASE		
+#if DEBUG_LOCK_SQLDATABASE
 				this.container.WriteDebugInfo("RebuildRecordKeys()，对'" + this.GetCaption("zh-CN") + "'数据库解读锁。");
 #endif
             }
 
             if (StringUtil.IsInList("fastmode", strStyle) == false
-&& this.FastMode == true)
+        && this.FastMode == true)
             {
                 // this.FastMode = false;
                 this.Commit();
@@ -18734,7 +19912,7 @@ bool bTempObject)
                         + " WHERE idstring=@id ;\r\n";
 #endif
                     strCommand += "DELETE FROM " + tableInfo.SqlTableName
-    + " WHERE idstring IN (" + strIdString + ") ;\r\n";
+        + " WHERE idstring IN (" + strIdString + ") ;\r\n";
 
                 }
 
@@ -18768,14 +19946,14 @@ bool bTempObject)
                         + " WHERE idstring=@id ;\r\n";
 #endif
                     strCommand += "DELETE FROM " + tableInfo.SqlTableName
-    + " WHERE idstring IN (" + strIdString + ") ;\r\n";
+        + " WHERE idstring IN (" + strIdString + ") ;\r\n";
 
                 }
 
                 if (string.IsNullOrEmpty(strCommand) == false)
                 {
                     strCommand = "use `" + this.m_strSqlDbName + "` ;\n"
-    + strCommand;
+        + strCommand;
 
                     using (MySqlCommand command = new MySqlCommand(strCommand,
                         connection.MySqlConnection))
@@ -18796,7 +19974,7 @@ bool bTempObject)
             else if (container.SqlServerType == SqlServerType.Oracle)
             {
                 using (OracleCommand command = new OracleCommand("",
-    connection.OracleConnection))
+        connection.OracleConnection))
                 {
                     command.BindByName = true;
 
@@ -18815,7 +19993,7 @@ bool bTempObject)
 #endif
 
                         strCommand = "DELETE FROM " + this.m_strSqlDbName + "_" + tableInfo.SqlTableName
-    + " WHERE idstring IN (" + strIdString + ") \r\n";
+        + " WHERE idstring IN (" + strIdString + ") \r\n";
 
                         // ????如果处理删除数量
                         command.CommandText = strCommand;
@@ -18949,7 +20127,7 @@ bool bTempObject)
                 if (string.IsNullOrEmpty(strCommand) == false)
                 {
                     strCommand = "use `" + this.m_strSqlDbName + "` ;\n"
-    + strCommand;
+        + strCommand;
 
                     using (MySqlCommand command = new MySqlCommand(strCommand,
                         connection.MySqlConnection))
@@ -18968,7 +20146,7 @@ bool bTempObject)
             else if (container.SqlServerType == SqlServerType.Oracle)
             {
                 using (OracleCommand command = new OracleCommand("",
-    connection.OracleConnection))
+        connection.OracleConnection))
                 {
                     command.BindByName = true;
 
@@ -18998,7 +20176,7 @@ bool bTempObject)
             return 0;
         }
 
-        // 从库中删除指定的记录,可以是记录也可以是资源
+        // 从库中删除指定的记录或者对象资源
         // parameters:
         //      connection  连接对象
         //      strID       记录id
@@ -19559,9 +20737,26 @@ bool bTempObject)
                 }
             }
 
+            // 2018/7/21
+            // 第四步，清除 PDF 页面文件缓存
+            {
+                // strID 为 10 字符，或者 0000000000_0000 形态
+                string record_path = this.GetCacheRecPath(strID);
+                _pageCache.ClearByRecPath(record_path,
+                    (filename) =>
+                    {
+                        this._streamCache.FileDelete(filename);
+                    });
+            }
+
             return nDeletedCount;
         }
 
+        string GetCacheRecPath(string strID)
+        {
+            Debug.Assert(strID.Length >= 10, "");
+            return this.FullID + "/" + strID;
+        }
 
         Connection GetConnection(
             string strConnectionString,

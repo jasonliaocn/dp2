@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Threading;
 
@@ -15,6 +14,33 @@ namespace DigitalPlatform.IO
     /// </summary>
     public class PathUtil
     {
+        // 检查 .xlsx 文件名的合法性，如果必要自动添加扩展名部分
+        public static string CheckXlsxFileName(ref string strFilePath)
+        {
+            try
+            {
+                string strPureFileName = Path.GetFileName(strFilePath);
+                if (string.IsNullOrEmpty(strPureFileName))
+                    return "文件名部分不应为空";
+                string strExtension = Path.GetExtension(strPureFileName);
+                if (string.IsNullOrEmpty(strExtension))
+                {
+                    // 自动加上扩展名部分
+                    strPureFileName = Path.GetFileNameWithoutExtension(strFilePath) + ".xlsx";
+                    strFilePath = Path.Combine(Path.GetDirectoryName(strFilePath), strPureFileName);
+                    strExtension = Path.GetExtension(strPureFileName);
+                }
+                if (string.Compare(strExtension, ".xlsx") != 0)
+                    return "文件扩展名应当为 .xlsx";
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return "文件名 '" + strFilePath + "' 不合法: " + ExceptionUtil.GetAutoText(ex);
+            }
+        }
+
         // 获得一个目录下的全部文件名。包括子目录中的
         public static List<string> GetFileNames(string strDataDir,
             FileNameFilterProc filter_proc = null)
@@ -708,7 +734,7 @@ namespace DigitalPlatform.IO
 
         // get clickonce shortcut filename
         // parameters:
-        //      strApplicationName  "DigitalPlatform/dp2 V2/dp2内务 V2"
+        //      strApplicationName  "DigitalPlatform/dp2 V3/dp2内务 V3"
         public static string GetShortcutFilePath(string strApplicationName)
         {
             // string publisherName = "Publisher Name";
@@ -1033,6 +1059,35 @@ namespace DigitalPlatform.IO
             foreach (FileInfo fi in fis)
             {
                 File.Delete(fi.FullName);
+            }
+        }
+
+        // 2018/10/12
+        // 计算一个目录中的文件个数
+        public static long GetFileCount(string strDir)
+        {
+            try
+            {
+                DirectoryInfo di = new DirectoryInfo(strDir);
+                if (di.Exists == false)
+                    return 0;
+
+                long count = 0;
+                // 计算所有的下级目录中的文件个数
+                DirectoryInfo[] dirs = di.GetDirectories();
+                foreach (DirectoryInfo childDir in dirs)
+                {
+                    count += GetFileCount(childDir.FullName);
+                }
+
+                // 所有文件
+                FileInfo[] fis = di.GetFiles();
+                count += fis.Length;
+                return count;
+            }
+            catch
+            {
+                return 0;
             }
         }
 

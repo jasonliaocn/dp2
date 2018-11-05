@@ -18,19 +18,6 @@ namespace dp2Circulation
 
     static class Program
     {
-        [DllImport("SHCore.dll", SetLastError = true)]
-        private static extern bool SetProcessDpiAwareness(PROCESS_DPI_AWARENESS awareness);
-
-        [DllImport("SHCore.dll", SetLastError = true)]
-        private static extern void GetProcessDpiAwareness(IntPtr hprocess, out PROCESS_DPI_AWARENESS awareness);
-
-        private enum PROCESS_DPI_AWARENESS
-        {
-            Process_DPI_Unaware = 0,
-            Process_System_DPI_Aware = 1,
-            Process_Per_Monitor_DPI_Aware = 2
-        }
-
         /// <summary>
         /// 前端，也就是 dp2circulation.exe 的版本号
         /// </summary>
@@ -68,13 +55,15 @@ namespace dp2Circulation
 
             List<string> args = StringUtil.GetCommandLineArgs();
 
+            // TODO: 检查 Windows 环境，如果可行就提示安装更高版本(如果更高版本的菜单事项还没有的话)
+
             // 绿色安装方式下，如果没有按住 Ctrl 键启动，会优先用 ClickOnce 方式启动
             if (ApplicationDeployment.IsNetworkDeployed == false
                 && Control.ModifierKeys != Keys.Control
                 && args.IndexOf("green") == -1
                 && StringUtil.IsDevelopMode() == false)
             {
-                string strShortcutFilePath = PathUtil.GetShortcutFilePath("DigitalPlatform/dp2 V2/dp2内务 V2");
+                string strShortcutFilePath = PathUtil.GetShortcutFilePath("DigitalPlatform/dp2 V3/dp2内务 V3");
                 if (File.Exists(strShortcutFilePath) == true)
                 {
                     try
@@ -123,6 +112,8 @@ namespace dp2Circulation
                     if (StringUtil.IsDevelopMode() == false)
                         PrepareCatchException();
 
+                    ProgramUtil.SetDpiAwareness();
+#if NO
                     // Vista on up = 6
                     // http://stackoverflow.com/questions/17406850/how-can-we-check-if-the-current-os-is-win8-or-blue
                     if (
@@ -153,6 +144,7 @@ I've been trying to disable the DPI awareness on a ClickOnce application.
                         var getDpiError = Marshal.GetLastWin32Error();
 #endif
                     }
+#endif
 
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
@@ -197,18 +189,29 @@ I've been trying to disable the DPI awareness on a ClickOnce application.
 
         public static void ReleaseMutex()
         {
-            ExecutionContext.Run(context, (state) =>
+            try
             {
-                if (mutex != null)
+                ExecutionContext.Run(context, (state) =>
                 {
+                    if (mutex != null)
+                    {
 #if NO
                     mutex.ReleaseMutex();
                     mutex.Dispose();
 #endif
+                        mutex.Close();
+                        mutex = null;
+                    }
+                }, null);
+            }
+            catch
+            {
+                if (mutex != null)
+                {
                     mutex.Close();
                     mutex = null;
                 }
-            }, null);
+            }
         }
 
         static List<string> _promptStrings = new List<string>();
@@ -303,20 +306,16 @@ I've been trying to disable the DPI awareness on a ClickOnce application.
 
             // TODO: 给出操作系统的一般信息
 
+            MainForm.WriteErrorLog(strError);
+#if NO
             // MainForm main_form = Form.ActiveForm as MainForm;
             if (_mainForm != null)
             {
-                try
-                {
-                    _mainForm.WriteErrorLog(strError);
-                }
-                catch
-                {
-                    WriteWindowsLog(strError, EventLogEntryType.Error);
-                }
+                _mainForm.TryWriteErrorLog(strError);
             }
             else
                 WriteWindowsLog(strError, EventLogEntryType.Error);
+#endif
 
             return strError;
         }
@@ -408,10 +407,13 @@ I've been trying to disable the DPI awareness on a ClickOnce application.
                 strError = "向 dp2003.com 发送异常报告时出错，未能发送成功。详细情况: " + strError;
                 MessageBox.Show(_mainForm, strError);
                 // 写入错误日志
+                MainForm.WriteErrorLog(strError);
+#if NO
                 if (_mainForm != null)
                     _mainForm.WriteErrorLog(strError);
                 else
                     WriteWindowsLog(strError, EventLogEntryType.Error);
+#endif
             }
         }
 
@@ -419,9 +421,16 @@ I've been trying to disable the DPI awareness on a ClickOnce application.
         public static void WriteWindowsLog(string strText,
             EventLogEntryType type)
         {
-            EventLog Log = new EventLog("Application");
-            Log.Source = "dp2Circulation";
-            Log.WriteEntry(strText, type);
+            try
+            {
+                EventLog Log = new EventLog("Application");
+                Log.Source = "dp2Circulation";
+                Log.WriteEntry(strText, type);
+            }
+            catch
+            {
+
+            }
         }
     }
 }

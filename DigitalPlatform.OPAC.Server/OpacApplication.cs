@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Xml;
 using System.IO;
@@ -16,11 +15,9 @@ using System.Drawing.Imaging;
 using System.Web.UI;
 
 using ZXing;
-using ZXing.Common;
 using ZXing.QrCode;
 using ZXing.QrCode.Internal;
 
-using DigitalPlatform;
 using DigitalPlatform.Xml;
 using DigitalPlatform.IO;
 using DigitalPlatform.Text;
@@ -189,7 +186,6 @@ namespace DigitalPlatform.OPAC.Server
         public bool CanReserveOnshelf = true;   // 是否可以预约在架图书
 
         public SearchLog SearchLog = null;
-
 
         // 构造函数
         public OpacApplication()
@@ -408,6 +404,10 @@ namespace DigitalPlatform.OPAC.Server
 
                 if (PathUtil.TryClearDir(app.TempDir) == false)
                     this.WriteErrorLog("清除临时文件目录 " + app.TempDir + " 时出错");
+
+                // 2018/10/23
+                // 清除一些特殊的临时文件
+                this.TryClearSpecialTempFiles();
 
                 // bin dir
                 app.BinDir = Path.Combine(strHostDir, "bin");
@@ -739,7 +739,7 @@ namespace DigitalPlatform.OPAC.Server
             }
 
             return 0;
-        ERROR1:
+            ERROR1:
             if (bReload == false)
             {
                 if (this.watcher == null)
@@ -811,6 +811,19 @@ namespace DigitalPlatform.OPAC.Server
 #endif
                 if (channel.Param is string)
                     e.Parameters = (string)channel.Param;
+            }
+        }
+
+        public void TryClearSpecialTempFiles()
+        {
+            string strFileName = Path.Combine(this.DataDir, "cfgs\\statis_timerange.xml.1");
+            try
+            {
+                File.Delete(strFileName);
+            }
+            catch
+            {
+
             }
         }
 
@@ -1265,7 +1278,7 @@ namespace DigitalPlatform.OPAC.Server
 
             this.m_fromTable[strKey] = infos;
             return 0;
-        ERROR1:
+            ERROR1:
             return -1;
         }
 
@@ -1357,15 +1370,14 @@ namespace DigitalPlatform.OPAC.Server
                         }
                     }
 
-                    string strValue = "";
                     lRet = // session.Channel.
                         channel.GetSystemParameter(
                         null,
                         "circulation",
                         "chargingOperDatabase",
-                        out strValue,
+                        out string strValue,
                         out strError);
-                    this.WriteErrorLog("GetSystemParameters() circulation chargingOperDatabase return " + lRet + " , strError '" + strError + "'");
+                    this.WriteErrorLog("GetSystemParameters() circulation chargingOperDatabase return " + lRet + " , strValue '" + strValue + "', strError '" + strError + "'。(这是一条提示信息，不一定等于出错)");
                     if (strValue == "enabled")
                         this.ChargingHistoryType = strValue;
                     else
@@ -1596,7 +1608,7 @@ namespace DigitalPlatform.OPAC.Server
                 this.m_lock.ReleaseWriterLock();
             }
 
-        ERROR1:
+            ERROR1:
             return -1;
         }
 
@@ -2101,7 +2113,7 @@ System.Text.Encoding.UTF8))
                 }
 
                 int nRedoCount = 0;
-            REDO:
+                REDO:
                 XmlDocument webuidom = new XmlDocument();
                 try
                 {
@@ -3715,14 +3727,14 @@ System.Text.Encoding.UTF8))
 
                 string strLocalPath = postedFile.FileName;
 
-            // page.Response.Write("<br/>正在保存" + strLocalPath);
+                // page.Response.Write("<br/>正在保存" + strLocalPath);
 
-            REDOWHOLESAVE:
+                REDOWHOLESAVE:
                 string strWarning = "";
 
                 for (int j = 0; j < ranges.Length; j++)
                 {
-                REDOSINGLESAVE:
+                    REDOSINGLESAVE:
 
                     // Application.DoEvents();	// 出让界面控制权
 
@@ -3801,8 +3813,8 @@ out strError);
                 }
 
 
-                return 1;	// 已经保存
-            ERROR1:
+                return 1;   // 已经保存
+                ERROR1:
                 return -1;
             }
             finally
@@ -4105,10 +4117,6 @@ out strError);
             // return:
             //		-1	出错。具体出错原因在this.ErrorCode中。this.ErrorInfo中有出错信息。
             //		0	成功
-            string strMetaData = "";
-            string strOutputPath;
-            byte[] baOutputTimeStamp = null;
-            byte[] baContent = null;
             // 只获得媒体类型
             long lRet = channel.GetRes(
                 stop,
@@ -4116,10 +4124,10 @@ out strError);
                 0,
                 0,
                 "metadata",
-                out baContent,
-                out strMetaData,
-                out strOutputPath,
-                out baOutputTimeStamp,
+                out byte[] baContent,
+                out string strMetaData,
+                out string strOutputPath,
+                out byte[] baOutputTimeStamp,
                 out strError);
             if (lRet == -1)
             {
@@ -4203,6 +4211,9 @@ out strError);
 #endif
 
             string strLastModifyTime = (string)values["lastmodifytime"];
+            // 2018/7/22
+            if (string.IsNullOrEmpty(strLastModifyTime))
+                strLastModifyTime = (string)values["lastmodified"];
             if (String.IsNullOrEmpty(strLastModifyTime) == false)
             {
                 DateTime lastmodified = DateTime.Parse(strLastModifyTime).ToUniversalTime();
@@ -4273,8 +4284,8 @@ Value data: HEX 0x1
              * */
 
             // 设置媒体类型
-            if (strMime == "text/plain")
-                strMime = "text";
+            //if (strMime == "text/plain")
+            //    strMime = "text";
             Page.Response.ContentType = strMime;
 
             string strSize = (string)values["size"];
@@ -4333,7 +4344,7 @@ Value data: HEX 0x1
             Color.Transparent,
             Color.Gray,
             ArtEffect.None,
-            ImageFormat.Png,
+            ImageFormat.Png,    // TODO: 可否用 jpeg 格式?
             200))
             {
                 Page.Response.ContentType = "image/png";

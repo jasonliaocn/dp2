@@ -97,7 +97,7 @@ namespace DigitalPlatform.rms
         {
         }
 
-        // 将Connection的Transaction Commit
+        // 将 Connection 的 Transaction Commit
         internal virtual void Commit()
         {
         }
@@ -630,9 +630,12 @@ namespace DigitalPlatform.rms
         //      -1  出错
         //      0   成功
         // 线：安全的
-        public int CheckTailNo(out string strError)
+        public int CheckTailNo(CancellationToken token,
+            out string strError)
         {
             strError = "";
+
+            token.ThrowIfCancellationRequested();
 
             if (this.m_bTailNoVerified == true)
                 return 0;
@@ -654,6 +657,8 @@ namespace DigitalPlatform.rms
                 nRet = this.UpdateStructure(out strError);
                 if (nRet < 0)
                     return nRet;
+
+                token.ThrowIfCancellationRequested();
 
                 // return:
                 //		-1  出错
@@ -683,6 +688,8 @@ namespace DigitalPlatform.rms
 				this.container.WriteDebugInfo("CheckTailNo()，对'" + this.GetCaption("zh-CN") + "'数据库解读锁。");
 #endif
             }
+
+            token.ThrowIfCancellationRequested();
 
             //this.container.WriteErrorLog("走到'" + this.GetCaption("zh-CN") + "'数据库的CheckTailNo()函数里，查到最大记录号为'" + strRealTailNo + "'。");
 
@@ -1245,12 +1252,15 @@ namespace DigitalPlatform.rms
 
 
         // 按指定范围读对象
-        // strRecordID  从属的记录ID
-        // strObjectID  资源对象ID
+        // parameters:
+        //      strRecordID  从属的记录ID
+        //      strObjectID  资源对象ID
+        //      strXPath    要获取的记录局部描述
         // 其它参数GetXml(),无strOutputResPath参数
         // 线: 安全的
         public virtual long GetObject(string strRecordID,
             string strObjectID,
+            string strXPath,
             long lStart,
             int nLength,
             int nMaxLength,
@@ -1880,7 +1890,13 @@ namespace DigitalPlatform.rms
                 }
 
                 return Math.Max(1, nRet);   // 避免返回 0 和没有找到的情况混淆
-            ERROR1:
+                ERROR1:
+                // 2018/10/10
+                if (cols == null || cols.Length == 0)
+                {
+                    cols = new string[1];
+                    cols[0] = "error: " + strError;
+                }
 #if NO
                 cols = new string[1];
                 cols[0] = strError;

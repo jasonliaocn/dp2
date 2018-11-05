@@ -562,7 +562,7 @@ namespace DigitalPlatform.LibraryServer
                 XmlNode node = this.LibraryCfgDom.DocumentElement.SelectSingleNode("//accounts/account[@name='" + strUserName + "']");
                 if (node == null)
                 {
-                    strError = "用户 '" + strUserName + "' 不存在";
+                    strError = "用户 '" + strUserName + "' 不存在 (1)";
                     return -1;
                 }
 
@@ -955,6 +955,8 @@ namespace DigitalPlatform.LibraryServer
                 }
             }
 
+            if (bChanged == true)
+                return 1;
             return 0;
         }
 
@@ -1051,7 +1053,7 @@ namespace DigitalPlatform.LibraryServer
                 nodeAccount = this.LibraryCfgDom.DocumentElement.SelectSingleNode("//accounts/account[@name='" + strUserName + "']");
                 if (nodeAccount == null)
                 {
-                    strError = "用户 '" + strUserName + "' 不存在";
+                    strError = "用户 '" + strUserName + "' 不存在 (2)";
                     return -1;
                 }
 
@@ -1217,7 +1219,7 @@ namespace DigitalPlatform.LibraryServer
                 nodeAccount = this.LibraryCfgDom.DocumentElement.SelectSingleNode("//accounts/account[@name='" + strUserName + "']");
                 if (nodeAccount == null)
                 {
-                    strError = "用户 '" + strUserName + "' 不存在";
+                    strError = "用户 '" + strUserName + "' 不存在 (3)";
                     return -1;
                 }
 
@@ -1313,7 +1315,7 @@ namespace DigitalPlatform.LibraryServer
                 nodeAccount = this.LibraryCfgDom.DocumentElement.SelectSingleNode("//accounts/account[@name='" + strUserName + "']");
                 if (nodeAccount == null)
                 {
-                    strError = "用户 '" + strUserName + "' 不存在";
+                    strError = "用户 '" + strUserName + "' 不存在 (4)";
                     return -1;
                 }
                 strOldOuterXml = nodeAccount.OuterXml;

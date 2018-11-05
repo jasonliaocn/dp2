@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Windows.Forms;
 using System.IO;
 using System.Threading.Tasks;
@@ -69,18 +67,6 @@ namespace dp2Circulation
             }
         }
 
-        class NormalResult
-        {
-            public int Value { get; set; }
-            public string ErrorInfo { get; set; }
-
-            public NormalResult(int value, string error)
-            {
-                this.Value = value;
-                this.ErrorInfo = error;
-            }
-        }
-
         Task<NormalResult> BeginCheckMD5(string strServerFilePath,
             string strLocalFilePath)
         {
@@ -113,7 +99,6 @@ namespace dp2Circulation
             try
             {
                 // 检查 MD5
-                byte[] server_md5 = null;
                 // return:
                 //      -1  出错
                 //      0   文件没有找到
@@ -122,7 +107,7 @@ namespace dp2Circulation
                     channel,
                     Stop,   // this.Stop,
                     strServerFilePath,
-                    out server_md5,
+                    out byte[] server_md5,
                     out strError);
                 if (nRet != 1)
                 {
@@ -1734,7 +1719,7 @@ MessageBoxDefaultButton.Button1);
                     dlg.Close();
                 }));
                 return;
-            ERROR1:
+                ERROR1:
                 this.Invoke((Action)(() =>
                 {
                     e.FuncEnd?.Invoke(false);

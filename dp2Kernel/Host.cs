@@ -1,14 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Diagnostics;
-using System.Linq;
 using System.ServiceProcess;
-using System.Text;
 using System.Threading;
-using System.Runtime.InteropServices;
-using System.Reflection;
+using System.Text;
 
 using System.Security.Cryptography.X509Certificates;
 // using System.IdentityModel.Selectors;
@@ -16,19 +11,18 @@ using System.Security.Cryptography.X509Certificates;
 using System.ServiceModel;
 using System.ServiceModel.Description;
 using System.Xml;
-using System.IO;
 using System.Collections;
-
-using Microsoft.Win32;
-
-using DigitalPlatform.rms;
-using DigitalPlatform.IO;
-using DigitalPlatform;
-using DigitalPlatform.Install;
 using System.Runtime.Remoting.Channels.Ipc;
 using System.Runtime.Remoting.Channels;
 using System.Runtime.Serialization.Formatters;
 using System.Runtime.Remoting;
+using System.Threading.Tasks;
+
+using Microsoft.Win32;
+
+using DigitalPlatform.IO;
+using DigitalPlatform;
+using DigitalPlatform.Install;
 
 namespace dp2Kernel
 {
@@ -204,6 +198,7 @@ namespace dp2Kernel
             return null;
         }
 
+#if NO
         void CloseHosts()
         {
             foreach (ServiceHost host in this.m_hosts)
@@ -219,6 +214,61 @@ namespace dp2Kernel
             }
 
             this.m_hosts.Clear();
+        }
+#endif
+        static string GetTime()
+        {
+            return DateTime.Now.ToLongTimeString() + " ";
+        }
+
+        void CloseHosts()
+        {
+            StringBuilder debugInfo = new StringBuilder();
+
+            debugInfo.AppendFormat("{0}开始停止 {1} 个 host\r\n", GetTime(), this.m_hosts.Count);
+
+            List<Task> tasks = new List<Task>();
+            List<HostInfo> infos = new List<HostInfo>();
+            {
+                foreach (ServiceHost host in this.m_hosts)
+                {
+                    HostInfo info = host.Extensions.Find<HostInfo>();
+                    if (info != null)
+                    {
+                        infos.Add(info);
+                        host.Extensions.Remove(info);
+                    }
+                    tasks.Add(Task.Factory.FromAsync(host.BeginClose, host.EndClose, null));
+
+                    //debugInfo.AppendFormat("{0} 开始停止 host {1}\r\n", GetTime(), host.GetHashCode());
+                    //host.Close();
+                    //debugInfo.AppendFormat("{0} 完成停止 host {1}\r\n", GetTime(), host.GetHashCode());
+                }
+
+                this.m_hosts.Clear();
+            }
+
+            // 用多线程集中 Dispose()
+            if (infos.Count > 0)
+            {
+                //debugInfo.AppendFormat("{0} 开始停止 {1} 个 Application\r\n", GetTime(), infos.Count);
+                foreach (HostInfo info in infos)
+                {
+                    Task.Run(() => info.Dispose());
+                }
+                //debugInfo.AppendFormat("{0} 完成停止 {1} 个 Application\r\n", GetTime(), infos.Count);
+            }
+
+            int timeout = 10000;
+            while (!Task.WaitAll(tasks.ToArray(), timeout))
+            {
+                RequestAdditionalTime(timeout);
+            }
+
+            debugInfo.AppendFormat("{0}完成停止 hosts\r\n", GetTime());
+
+            this.Log.WriteEntry("dp2Kernel CloseHosts() debugInfo: \r\n" + debugInfo.ToString(),
+EventLogEntryType.Information);
         }
 
         // 关闭一个指定的 host
@@ -374,8 +424,7 @@ namespace dp2Kernel
         {
             CloseHosts();
 
-            List<string> errors = null;
-            OpenHosts(null, out errors);
+            OpenHosts(null, out List<string> errors);
 
             this.Log.WriteEntry("dp2Kernel OnStart() end",
 EventLogEntryType.Information);
@@ -551,14 +600,17 @@ EventLogEntryType.Error);
                     host.Description.Behaviors.Add(behavior);
                 }
 
+                // 直接用默认值即可
+#if NO
                 if (host.Description.Behaviors.Find<ServiceThrottlingBehavior>() == null)
                 {
                     ServiceThrottlingBehavior behavior = new ServiceThrottlingBehavior();
+                    behavior.MaxConcurrentSessions = 1000;
                     behavior.MaxConcurrentCalls = 50;
                     behavior.MaxConcurrentInstances = 1000;
-                    behavior.MaxConcurrentSessions = 1000;
                     host.Description.Behaviors.Add(behavior);
                 }
+#endif
 
                 // IncludeExceptionDetailInFaults
                 ServiceDebugBehavior debug_behavior = host.Description.Behaviors.Find<ServiceDebugBehavior>();
@@ -696,7 +748,7 @@ EventLogEntryType.Error);
             wshttp_binding.Security.Message.ClientCredentialType = MessageCredentialType.UserName;
             // wshttp_binding.Security.Message.NegotiateServiceCredential = false;
             // wshttp_binding.Security.Message.EstablishSecurityContext = false;
-
+            
             wshttp_binding.MaxReceivedMessageSize = 1024 * 1024;
             wshttp_binding.MessageEncoding = WSMessageEncoding.Mtom;
             XmlDictionaryReaderQuotas quotas = new XmlDictionaryReaderQuotas();
@@ -801,7 +853,7 @@ strCertSN);
         {
             this.Log.WriteEntry("dp2Kernel OnStart() begin",
 EventLogEntryType.Information);
-            
+
             try
             {
                 StartRemotingServer();
@@ -849,7 +901,7 @@ EventLogEntryType.Error);
             EndRemotingServer();
         }
 
-        #region Windows Service 控制命令设施
+#region Windows Service 控制命令设施
 
         IpcServerChannel m_serverChannel = null;
 
@@ -891,7 +943,7 @@ EventLogEntryType.Error);
             }
         }
 
-        #endregion
+#endregion
 
     }
 
