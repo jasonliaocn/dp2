@@ -5026,7 +5026,7 @@ MessageBoxDefaultButton.Button2);
         //      -1  error
         //      0   放弃输入
         //      1   成功输入
-        async Task<GetFingerprintStringResult> ReadFingerprintString()
+        async Task<GetFingerprintStringResult> ReadFingerprintString(string strExcludeBarcodes)
         {
             string strError = "";
             GetFingerprintStringResult result = new GetFingerprintStringResult();
@@ -5060,7 +5060,7 @@ MessageBoxDefaultButton.Button2);
 
                     return nRet;
 #endif
-                return await GetFingerprintString(channel);
+                return await GetFingerprintString(channel, strExcludeBarcodes);
             }
             catch (Exception ex)
             {
@@ -5087,41 +5087,109 @@ MessageBoxDefaultButton.Button2);
             public string ErrorInfo { get; set; }
         }
 
-        Task<GetFingerprintStringResult> GetFingerprintString(FingerprintChannel channel)
+        Task<GetFingerprintStringResult> GetFingerprintString(FingerprintChannel channel,
+            string strExcludeBarcodes)
         {
             return Task.Factory.StartNew<GetFingerprintStringResult>(
     () =>
     {
-        return CallGetFingerprintString(channel);
+        return CallGetFingerprintString(channel, strExcludeBarcodes);
     });
         }
 
-        GetFingerprintStringResult CallGetFingerprintString(FingerprintChannel channel)
+        GetFingerprintStringResult CallGetFingerprintString(FingerprintChannel channel,
+            string strExcludeBarcodes)
         {
             GetFingerprintStringResult result = new GetFingerprintStringResult();
             try
             {
-                string strError = "";
-                string strFingerprint = "";
-                string strVersion = "";
+                // 先尝试 2.0 版本
+                try
+                {
+                    int nRet = channel.Object.GetFingerprintString(
+                        strExcludeBarcodes,
+                        out string strFingerprint,
+                        out string strVersion,
+                        out string strError);
+                    result.Fingerprint = strFingerprint;
+                    result.Version = strVersion;
+                    result.ErrorInfo = strError;
+                    result.Value = nRet;
+                    if (nRet == -1)
+                    {
+                        if (strVersion != "[not support]")
+                            return result;
+                    }
+                    else
+                        return result;
+                }
+                catch (System.Runtime.Remoting.RemotingException)
+                {
+                }
+
+                // 然后尝试用 V1.0 调用方式
+                {
+                    // 获得一个指纹特征字符串
+                    // return:
+                    //      -1  error
+                    //      0   放弃输入
+                    //      1   成功输入
+                    int nRet = channel.Object.GetFingerprintString(out string strFingerprint,
+                    out string strVersion,
+                    out string strError);
+
+                    result.Fingerprint = strFingerprint;
+                    result.Version = strVersion;
+                    result.ErrorInfo = strError;
+                    result.Value = nRet;
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.ErrorInfo = "GetFingerprintString() 异常: " + ex.Message;
+                result.Value = -1;
+                return result;
+            }
+        }
+
+        public class GetVersionResult : NormalResult
+        {
+            public string CfgInfo { get; set; }
+            public string Version { get; set; }
+        }
+
+        public static GetVersionResult CallGetVersion(FingerprintChannel channel)
+        {
+            GetVersionResult result = new GetVersionResult();
+            try
+            {
                 // 获得一个指纹特征字符串
                 // return:
                 //      -1  error
                 //      0   放弃输入
                 //      1   成功输入
-                int nRet = channel.Object.GetFingerprintString(out strFingerprint,
-                    out strVersion,
-                    out strError);
+                int nRet = channel.Object.GetVersion(out string strVersion,
+                    out string strCfgInfo,
+                    out string strError);
 
-                result.Fingerprint = strFingerprint;
+                result.CfgInfo = strCfgInfo;
                 result.Version = strVersion;
                 result.ErrorInfo = strError;
                 result.Value = nRet;
                 return result;
             }
+            catch (System.Runtime.Remoting.RemotingException)
+            {
+                result.CfgInfo = "";
+                result.Version = "1.0";
+                result.ErrorInfo = "";
+                result.Value = 0;
+                return result;
+            }
             catch (Exception ex)
             {
-                result.ErrorInfo = "GetFingerprintString() 异常: " + ex.Message;
+                result.ErrorInfo = "CallGetVersion() 异常: " + ex.Message;
                 result.Value = -1;
                 return result;
             }
@@ -5170,7 +5238,7 @@ MessageBoxDefaultButton.Button1);
                 if (nRet == -1 || nRet == 0)
                     goto ERROR1;
 #endif
-                GetFingerprintStringResult result = await ReadFingerprintString();
+                GetFingerprintStringResult result = await ReadFingerprintString(this.readerEditControl1.Barcode);
                 if (result.Value == -1)
                 {
                     DialogResult temp_result = MessageBox.Show(this,
@@ -6212,5 +6280,37 @@ MessageBoxDefaultButton.Button1);
             }
         }
 
+        // 编辑读者记录 XML
+        private void toolStripMenuItem_editXML_Click(object sender, EventArgs e)
+        {
+            int nRet = this.readerEditControl1.GetData(out string strXml,
+                out string strError);
+            if (nRet == -1)
+                goto ERROR1;
+            strXml = DomUtil.GetIndentXml(strXml);
+            string result = EditDialog.GetInput(this,
+                "readerInfoForm",
+                "读者记录 XML",
+                strXml,
+                this.Font);
+            if (result == null)
+                return;
+
+            nRet = this.readerEditControl1.SetData(result,
+                this.readerEditControl1.RecPath,
+                this.readerEditControl1.Timestamp,
+                out strError);
+            if (nRet == -1)
+                goto ERROR1;
+
+            Global.SetXmlToWebbrowser(this.webBrowser_xml,
+    Program.MainForm.DataDir,
+    "xml",
+    result);
+
+            return;
+            ERROR1:
+            MessageBox.Show(this, strError);
+        }
     }
 }
